@@ -46,3 +46,7 @@ pingora-core = { version = "0.8.2", package = "quixotic-plecostomus-core", featu
 switchyard-libsy = "=0.2.0"
 switchyard-protocol = "=0.2.0"
 switchyard-translation = "=0.2.0"
+
+[dev-dependencies]
+# Loopback mock judge + echo upstreams keep the integration tests hermetic.
+tokio = { workspace = true, features = ["net", "time", "rt-multi-thread", "macros"] }
