@@ -136,47 +136,48 @@ request wrongly*; it cannot conjure a route where none exists. Deployments
 that need judge-outage survivability should front a default route at a
 different layer.
 
-## Local demo (verified)
+## Local demo (verified, real judge)
 
-Everything lives in `hack/switchyard-demo/`: `praxis.yaml` (gateway on
-`127.0.0.1:18080`, judge callout to `:18091`, weak/strong clusters on
-`:18092`/`:18093`) and `stubs.py` (a stdlib-only judge + two echo
-upstreams; the judge routes to `strong` when the newest user message
-contains the word "hard").
+Everything lives in `hack/switchyard-demo/` (see its README): the judge is
+a **real** OpenAI-compatible model of your choosing; only the two upstream
+"clusters" are stubbed (`upstreams.py`, loopback echo servers on
+`:18092`/`:18093`) so the chosen cluster and the rewritten `model` field
+are plainly visible. `run-demo.sh` renders `praxis.yaml` from the template,
+starts everything (gateway on `127.0.0.1:18080`), and runs four turns:
 
 ```console
-$ cargo build -p switchyard-server
 $ cd hack/switchyard-demo
-$ python3 stubs.py &
-$ ../../target/debug/switchyard-server &   # reads ./praxis.yaml
+$ JUDGE_ENDPOINT=http://127.0.0.1:11434/v1/chat/completions \
+  JUDGE_MODEL=llama3.2:3b \
+  ./run-demo.sh
 ```
 
-Transcript (recorded 2026-08-18 against this revision):
+Transcript (recorded 2026-08-18 against this revision, judge =
+`llama3.2:3b` served by a local Ollama — a real LLM verdict, not a script):
 
 ```console
-$ curl -s -X POST http://127.0.0.1:18080/v1/chat/completions \
-    -H 'content-type: application/json' \
-    -H 'x-switchyard-session-id: demo-A' \
-    -d '{"model":"agent-default","messages":[{"role":"user","content":"what is 2+2?"}]}'
+--- turn 1: easy question, session demo-A (expect weak) ---
 {"served_by": "weak-upstream", "model_received": "qwen-mini"}
-
-$ # hard question, same session -> strong
-$ curl -s ... -H 'x-switchyard-session-id: demo-A' \
-    -d '{"model":"agent-default","messages":[{"role":"user","content":"prove a hard novel theorem in algebraic topology"}]}'
+--- turn 2: hard question, session demo-A (expect strong) ---
 {"served_by": "strong-upstream", "model_received": "qwen-max"}
-
-$ # easy question again, same session -> the floor HOLDS strong
-$ curl -s ... -H 'x-switchyard-session-id: demo-A' \
-    -d '{"model":"agent-default","messages":[{"role":"user","content":"what is 3+3?"}]}'
+--- turn 3: easy question again, session demo-A (the floor must HOLD strong) ---
 {"served_by": "strong-upstream", "model_received": "qwen-max"}
-
-$ # fresh session is isolated -> weak again
-$ curl -s ... -H 'x-switchyard-session-id: demo-B' \
-    -d '{"model":"agent-default","messages":[{"role":"user","content":"what is 4+4?"}]}'
+--- turn 4: easy question, fresh session demo-B (isolated; expect weak) ---
 {"served_by": "weak-upstream", "model_received": "qwen-mini"}
 ```
 
-With the judge stopped (upstreams still running), the same request logs
+The client sent `"model": "agent-default"` on every turn; what each
+upstream *received* is the tier model the filter wrote. Turns 1/2/4 are the
+judge's real classification; turn 3 is the host-side floor overriding a
+judge that would have said `weak`.
+
+Judge-model realities observed while recording: a thinking model
+(`qwen3:8b`) blew a 20 s judge deadline on the hard prompt — the filter
+failed open exactly as designed (`routing unavailable: sub-request deadline
+exceeded`, body untouched). Pick a small, fast judge; the demo template
+uses a generous 60 s deadline for local models.
+
+With the judge stopped (upstreams still running), a request logs
 `switchyard_route: routing unavailable ... Connection refused` at the
 filter, passes through unmodified, and the load balancer returns 500 (`no
 cluster set in context`) — the topology consequence described above.

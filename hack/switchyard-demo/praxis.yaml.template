@@ -26,7 +26,9 @@ filter_chains:
         judge:
           endpoint: "__JUDGE_ENDPOINT__"
           model: __JUDGE_MODEL__
-          timeout_ms: 20000
+          # Generous: real local judges (especially thinking models) can be
+          # slow; production judges should be small and fast (~2000 ms).
+          timeout_ms: 60000
         threshold: 0.5
         targets:
           weak:
