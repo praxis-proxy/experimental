@@ -19,9 +19,30 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1.89"
+bytes = "1.12.1"
+dashmap = "6.2.1"
+futures = "0.3.31"
+http = "1.5.0"
+serde = { workspace = true }
+serde_json = "1.0.151"
 serde_yaml = { package = "yaml_serde", version = "0.10.4" }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["net", "time"] }
+tracing = { workspace = true }
 
 # Praxis core (crates.io). Keep in lockstep with praxis-proxy/ai's pins so the
 # `FilterRegistry` type unifies to a single version across this workspace and the
 # git-pinned praxis-ai-proxy server crate.
 praxis-filter = { version = "0.5.2", package = "praxis-proxy-filter" }
+praxis-core = { version = "0.5.2", package = "praxis-proxy-core" }
+# The pingora fork praxis builds on; needed only for `HttpPeer` (judge callout
+# targets). Keep in lockstep with praxis-proxy-filter's own pin.
+pingora-core = { version = "0.8.2", package = "quixotic-plecostomus-core", features = ["rustls"] }
+
+# NVIDIA NeMo Switchyard (pre-alpha; decision library). Pinned exactly:
+# =0.2.0 == git tag v0.2.0 == commit 1fc9ab887d1c663b0048ae24d5f473d15ed8daaa.
+# Any bump is a deliberate change: re-run deny/audit and re-verify the API
+# surface documented in docs/proposals and the module docs here.
+switchyard-libsy = "=0.2.0"
+switchyard-protocol = "=0.2.0"
+switchyard-translation = "=0.2.0"
