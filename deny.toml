@@ -30,4 +30,6 @@ highlight = "all"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+# praxis-ai crates are publish = false and only consumable as git dependencies;
+# switchyard-server pins them to an exact rev.
+allow-git = ["https://github.com/praxis-proxy/ai"]
