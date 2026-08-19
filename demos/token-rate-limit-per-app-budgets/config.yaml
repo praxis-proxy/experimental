@@ -6,7 +6,12 @@
 # after exactly one request.
 #
 # Source: examples/configs/token-rate-limit-per-app.yaml on
-# https://github.com/jordigilh/ai/tree/jordigilh/token-rate-limit-per-app-budgets
+# https://github.com/jordigilh/praxis-ai/tree/jordigilh/token-rate-limit-per-app-budgets
+#
+# `window: 10s` is also deliberately short (a real deployment would use
+# something like `1h`): long enough to observe the exact sliding-window
+# ledger age a reservation out and admit again, short enough to watch it
+# happen within a single curl walkthrough or recording.
 
 listeners:
   - name: default
@@ -23,7 +28,7 @@ filter_chains:
             cluster: backend
 
       - filter: token_rate_limit
-        window: 1h                    # sliding window duration, per app
+        window: 10s                   # sliding window duration, per app
         capacity: 40                  # each app's budget within the window, in tokens
         estimate_tokens: 40           # cost reserved per request at admission
         bucket_key_header: x-app-id   # one independent budget per app

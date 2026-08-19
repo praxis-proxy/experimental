@@ -1,0 +1,31 @@
+1
+00:00:00,000 --> 00:00:08,832
+This demo proves per app token budgets are enforced consistently across gateway replicas, and recover on their own as the window slides forward.
+
+2
+00:00:08,832 --> 00:00:15,456
+Two independent Praxis AI gateways share one Valkey backed sliding window ledger, keyed by a per app header.
+
+3
+00:00:15,456 --> 00:00:18,769
+App-a's first request, through Gateway A, is admitted.
+
+4
+00:00:18,769 --> 00:00:25,699
+Its next request, through Gateway B, a separate process, is denied: both gateways consult the same shared ledger.
+
+5
+00:00:25,699 --> 00:00:30,300
+Meanwhile app-b and app-c are each admitted on their own untouched budgets.
+
+6
+00:00:30,300 --> 00:00:32,017
+Now watch the window itself.
+
+7
+00:00:32,017 --> 00:00:41,953
+With a deliberately short ten second window, app-a's earlier reservation simply ages out on its own, and its next request is admitted again, with no manual reset.
+
+8
+00:00:41,953 --> 00:00:48,087
+One shared ledger, isolated per app budgets, and automatic recovery, across a real process boundary.

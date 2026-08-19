@@ -75,6 +75,15 @@ Valkey instance, no Grid, no multi-cluster routing. It isolates the
 per-app bucket-key architecture and the sliding-window/Valkey backend
 questions from the routing-layer questions the other demo explores.
 
+## Recorded walkthrough
+
+A narrated recording of the scenario below (`recording/output/final.mp4`),
+driven by a live browser against a real running instance of this stack, not
+staged -- see `recording/RECORDING.md` for what it proves and how to
+reproduce it. `dashboard/` is a browser-facing convenience used only for
+that recording; it wraps the same HTTP contract as the curl walkthrough
+below and is not part of the Praxis AI filter chain.
+
 ## Prerequisites
 
 - Docker or Podman with Compose (`docker compose` / `podman compose`)
@@ -88,7 +97,7 @@ Clone this repo and the source branch as siblings, then point
 ```bash
 git clone https://github.com/praxis-proxy/experimental.git
 git clone --branch jordigilh/token-rate-limit-per-app-budgets \
-  https://github.com/jordigilh/ai.git praxis-ai-trl-demo
+  https://github.com/jordigilh/praxis-ai.git praxis-ai-trl-demo
 
 cd experimental/demos/token-rate-limit-per-app-budgets
 export PRAXIS_AI_SRC=../../../praxis-ai-trl-demo
@@ -113,11 +122,14 @@ at the same Valkey `namespace`.
 ## Validate the request flow
 
 Each app's budget is `capacity: 40` tokens, `estimate_tokens: 40` per
-request — so the *first* request from a given app fully reserves its
-budget, and reconciliation only partially refunds it (the stub backend
-always reports `total_tokens: 10`, refunding 30 of the 40 reserved —
-not enough for another full-estimate admission before the window
-rolls over).
+request, `window: 10s` — so the *first* request from a given app fully
+reserves its budget, and reconciliation only partially refunds it (the
+stub backend always reports `total_tokens: 10`, refunding 30 of the 40
+reserved — not enough for another full-estimate admission until that
+reservation ages out of the 10s window). The window is shortened to
+10s purely so the recovery step below is watchable in seconds instead
+of the hour a production `window: 1h` would take; the mechanism is
+identical either way.
 
 Send app-a's first request to gateway A, then its second to gateway
 B — the *other* process:
@@ -152,6 +164,26 @@ Expect:
 - app-b's request on gateway B: `200` — app-b's budget is untouched by
   app-a's exhaustion, even though both apps' budgets live in the same
   Valkey namespace.
+
+Wait for the 10s window to age out app-a's original reservation, then
+retry on gateway A — no restart, no manual reset, nothing but time
+passing:
+
+```bash
+sleep 11
+echo "== app-a on gateway A again (expect 200 -- window recovered) =="
+curl -si http://127.0.0.1:8080/v1/chat/completions \
+  -H "x-app-id: app-a" -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}' \
+  | grep -Ei '^(HTTP|x-ratelimit|retry-after)'
+```
+
+Expect `200` — the sliding window has moved forward far enough that
+app-a's earlier reservation is no longer counted against its budget.
+This is what "sliding" means in practice: there is no fixed reset
+boundary (like a calendar month rolling over); each app's budget
+recovers continuously and independently as its own past usage ages
+out.
 
 This was verified against a live run of this exact compose stack while
 authoring this demo, not just against source.
@@ -225,13 +257,35 @@ thread, not as a substitute for it:
   the actual point of this demo. Valkey is the minimum needed to prove
   budgets survive a real process boundary.
 
+## Open design questions
+
+- **Algorithm choice is not yet specified by ai#658/ai#121.** This demo
+  and the source branch implement a sliding window unconditionally.
+  Neither the epic ([ai#121](https://github.com/praxis-proxy/ai/issues/121))
+  nor the proposal ([ai#658](https://github.com/praxis-proxy/ai/pull/658))
+  says whether `token_rate_limit` should support only sliding window, or
+  let an operator pick an algorithm (sliding window, token bucket, fixed
+  window) per rule. [praxis#551](https://github.com/praxis-proxy/praxis/issues/551) —
+  a separate, core-proxy rate-limit issue — already proposes both a
+  configurable window duration and independent per-rule algorithm
+  choice; whether that same principle should extend to `token_rate_limit`
+  is an open question worth raising against praxis#551 or ai#658 for
+  maintainer input, not something this demo or its source branch decide
+  unilaterally.
+- **Window duration is a config knob, not yet a customer-tunable
+  requirement anywhere in the proposal.** This demo uses `window: 10s`
+  purely to make the recovery visible in a short recording; nothing in
+  ai#658 pins the value, and calendar-aligned windows (e.g. reset at UTC
+  midnight rather than "most recent N seconds") are a distinct semantic
+  that sliding window does not provide and hasn't been requested yet.
+
 ## Related work
 
 - [Canonical token-rate-limit proposal](https://github.com/praxis-proxy/ai/pull/658)
 - [ai#129: Per-header rate limit bucket keys](https://github.com/praxis-proxy/ai/issues/129)
 - [ai#121: Epic — Token Rate Limiting](https://github.com/praxis-proxy/ai/issues/121)
 - [praxis#551: Sliding window rate limiting](https://github.com/praxis-proxy/praxis/issues/551)
-- [Source branch](https://github.com/jordigilh/ai/tree/jordigilh/token-rate-limit-per-app-budgets)
+- [Source branch](https://github.com/jordigilh/praxis-ai/tree/jordigilh/token-rate-limit-per-app-budgets)
 - [Distributed token rate limiting with Grid routing](../grid-distributed-token-rate-limit/README.md):
   a complementary demo exploring distributed counters, authentication,
   and multi-gateway quota sharing under Grid routing

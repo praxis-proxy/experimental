@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Per-app token budgets — proof agenda</title>
+<style>
+  body {
+    margin: 0; width: 1920px; height: 1080px;
+    background: #081321; color: #eef7ff;
+    font: 28px system-ui, sans-serif; padding: 100px; box-sizing: border-box;
+  }
+  h1 { font-size: 58px; color: #67e8f9; margin: 0 0 20px; }
+  .lede { color: #9db3c8; font-size: 30px; margin-bottom: 60px; }
+  .flow { display: flex; gap: 24px; align-items: center; margin: 60px 0 80px; }
+  .node {
+    border: 2px solid #416b8d; border-radius: 14px; padding: 30px;
+    background: #10253b; text-align: center; flex: 1;
+  }
+  .node.ledger { border-color: #67e8f9; }
+  .arrow { font-size: 40px; color: #416b8d; }
+  ol { font-size: 30px; line-height: 1.8; padding-left: 40px; }
+  ol b { color: #69e0a4; }
+  small { display: block; color: #9db3c8; margin-top: 40px; font-size: 22px; }
+</style>
+</head>
+<body>
+  <h1>Per-app token budgets, shared across gateway replicas</h1>
+  <p class="lede">What this demo proves — a scoped MVP slice of ai#658, exercised on a two-instance stack.</p>
+
+  <div class="flow">
+    <div class="node">Gateway A<br /><small>token_rate_limit</small></div>
+    <div class="arrow">&#8596;</div>
+    <div class="node ledger">Shared Valkey ledger<br /><small>one budget per x-app-id</small></div>
+    <div class="arrow">&#8596;</div>
+    <div class="node">Gateway B<br /><small>token_rate_limit</small></div>
+  </div>
+
+  <ol>
+    <li><b>Cross-instance enforcement:</b> app-a's budget, exhausted on Gateway A, is denied on Gateway B too.</li>
+    <li><b>Per-app isolation:</b> app-b's and app-c's budgets are untouched by app-a's exhaustion.</li>
+    <li><b>Reservation-based admission:</b> each admitted request reserves its estimated cost up front, atomically, via the shared ledger.</li>
+    <li><b>Automatic window recovery:</b> app-a's budget recovers on its own once its reservation ages out of the sliding window &mdash; no manual reset.</li>
+  </ol>
+
+  <small>Scope: two gateway replicas, one Valkey instance, no Grid, no multi-cluster routing, no authentication. See the demo README for what's explicitly out of scope.</small>
+</body>
+</html>
