@@ -1,0 +1,15 @@
+production:
+  id: token-rate-limit-per-app-budgets
+  title: Per-app token budgets across gateway replicas
+  output: { width: 1920, height: 1080, fps: 30, videoCodec: h264, audioCodec: aac }
+browser: { baseUrl: http://127.0.0.1:3000, viewport: { width: 1920, height: 1080 } }
+scenes:
+  - { id: agenda, kind: slide, source: slides/proof-agenda.html, narration: narration/narration.txt }
+  - { id: live-scenario, kind: browser, script: playwright/record.mjs, narration: narration/narration.txt }
+evidence:
+  required: [cross_instance_shared_budget, per_app_isolation, reservation_admission, window_recovery]
+redaction:
+  deny:
+    - odin
+    - thor
+    - loki

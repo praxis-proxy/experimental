@@ -1,0 +1,32 @@
+{
+  "production": "token-rate-limit-per-app-budgets",
+  "demonstrated": [
+    "cross_instance_shared_budget: app-a admitted on Gateway A (HTTP 200), then denied on Gateway B (HTTP 429, X-RateLimit-Remaining-Tokens: 0) for the same shared Valkey ledger",
+    "per_app_isolation: app-b admitted on Gateway B (HTTP 200) immediately after app-a's exhaustion in the same Valkey namespace",
+    "per_app_isolation: app-c admitted on Gateway A (HTTP 200) on its own independent, untouched budget",
+    "reservation_admission: each admitted request reserved its estimate_tokens cost atomically via the shared ledger before the response was known",
+    "window_recovery: app-a, previously denied, is admitted again on Gateway A (HTTP 200) once the 10s sliding window aged its earlier reservation out -- no manual reset, no restart, budget recovers purely because the window advanced"
+  ],
+  "configured": [
+    "window: 10s sliding window (shortened from the README's default 1h purely so the recording could show a full deny -> recover cycle in a watchable clip; the mechanism is identical at any window size)",
+    "capacity: 40 tokens per app",
+    "estimate_tokens: 40",
+    "bucket_key_header: x-app-id",
+    "backend: valkey, shared namespace across both gateway replicas"
+  ],
+  "inferred": [],
+  "trace_ids": [],
+  "validation": {
+    "media": "1920x1080 h264/aac, 48.09s -- passed src/validation/validate-media.js",
+    "production_schema": "passed src/validation/validate-production.js",
+    "live_gates": "5 requireGate assertions passed during recording against a live docker-compose stack (see playwright/record.mjs): app-a admitted on A, app-a denied on B (remaining=0), app-b admitted on B, app-c admitted on A, app-a re-admitted on A after the window aged out"
+  },
+  "limitations": [
+    "No OPENAI_API_KEY was available in this environment: narration audio used a local macOS `say` TTS fallback instead of the toolkit's OpenAI TTS (scripts/generate-narration.sh), and narration.srt caption timing is an approximate proportional-duration estimate rather than a real Whisper transcription (scripts/generate-captions.sh). Both are flagged deviations, not canonical toolkit output -- re-run with OPENAI_API_KEY set to get the toolkit's default pipeline.",
+    "No exact_trace evidence gate: this scenario is a single-hop admission decision with no cross-service routing, so there is no distributed trace to correlate. Evidence is instead the exact HTTP status/headers returned by the live gateways, asserted via requireGate during recording.",
+    "The browser dashboard (../dashboard/) is a demo-only recording convenience wrapping the same HTTP contract as the docker-compose README's curl walkthrough; it is not part of the Praxis AI filter chain and ships only with this recording, not upstream.",
+    "App names (app-a/app-b/app-c) are placeholders. The real customer scenario's application names are intentionally excluded (NDA) and enforced via production.yaml's redaction.deny list.",
+    "This remains early exploratory work validating ai#658's sliding-window design and the ai#129 bucket-key proposal, not a substitute for their own review threads -- see the parent README's \"Current scope\" section.",
+    "The window is a fixed 10s sliding window in this build. Neither ai#658 nor ai#121 specifies an algorithm (sliding window vs. token bucket vs. fixed window); praxis#551 (a separate, core-proxy rate-limit issue) already proposes per-rule algorithm choice and configurable window duration -- see the parent README's \"Open design questions\" section for the follow-up raised there."
+  ]
+}

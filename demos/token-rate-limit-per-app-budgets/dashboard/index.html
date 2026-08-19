@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Per-app token budgets — live demo</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; width: 1920px; min-height: 1080px;
+    background: #081321; color: #eef7ff;
+    font: 22px/1.4 system-ui, -apple-system, sans-serif;
+    padding: 56px 80px;
+  }
+  h1 { font-size: 44px; color: #67e8f9; margin: 0 0 6px; }
+  .subtitle { color: #9db3c8; font-size: 22px; margin: 0 0 36px; }
+  .topology {
+    display: flex; gap: 28px; align-items: stretch; margin-bottom: 36px;
+  }
+  .gw {
+    flex: 1; border: 2px solid #416b8d; border-radius: 16px;
+    background: #10253b; padding: 24px 28px;
+  }
+  .gw h2 { margin: 0 0 4px; font-size: 28px; color: #67e8f9; }
+  .gw .role { color: #9db3c8; font-size: 18px; margin-bottom: 18px; }
+  .apps { display: flex; gap: 16px; }
+  .app-btn {
+    flex: 1; padding: 18px 10px; border-radius: 12px; border: 2px solid #2d4a68;
+    background: #16324f; color: #eef7ff; font-size: 20px; font-weight: 600;
+    cursor: pointer;
+  }
+  .app-btn:hover { border-color: #67e8f9; }
+  .app-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .app-a { border-color: #69e0a4; } .app-b { border-color: #f0b354; } .app-c { border-color: #e08fe0; }
+  .budgets { display: flex; gap: 20px; margin-bottom: 30px; }
+  .budget-card {
+    flex: 1; border-radius: 14px; padding: 18px 24px; background: #10253b;
+    border-left: 8px solid #416b8d;
+  }
+  .budget-card.app-a { border-left-color: #69e0a4; }
+  .budget-card.app-b { border-left-color: #f0b354; }
+  .budget-card.app-c { border-left-color: #e08fe0; }
+  .budget-card .name { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+  .budget-card .state { font-size: 34px; font-weight: 700; }
+  .budget-card .state.admitted { color: #69e0a4; }
+  .budget-card .state.denied { color: #f87171; }
+  .budget-card .state.idle { color: #9db3c8; }
+  .budget-card .detail { color: #9db3c8; font-size: 16px; margin-top: 4px; }
+  .controls { margin-bottom: 24px; }
+  #run-scenario {
+    font-size: 22px; font-weight: 700; padding: 16px 36px; border-radius: 12px;
+    border: none; background: #67e8f9; color: #08131f; cursor: pointer;
+  }
+  #run-scenario:disabled { opacity: 0.5; cursor: not-allowed; }
+  #log {
+    background: #050d17; border: 2px solid #2d4a68; border-radius: 14px;
+    padding: 20px 26px; height: 420px; overflow-y: auto;
+    font: 19px/1.6 ui-monospace, SFMono-Regular, monospace;
+  }
+  #log .row { padding: 4px 0; border-bottom: 1px solid #16324f; }
+  #log .row:last-child { border-bottom: none; }
+  #log .ok { color: #69e0a4; }
+  #log .denied { color: #f87171; }
+  #log .step { color: #67e8f9; font-weight: 700; }
+</style>
+</head>
+<body>
+  <h1>Per-app token budgets — shared across gateway replicas</h1>
+  <p class="subtitle">One <code>token_rate_limit</code> rule, keyed by <code>x-app-id</code>, backed by a shared Valkey sliding-window ledger.</p>
+
+  <div class="topology">
+    <div class="gw">
+      <h2>Gateway A</h2>
+      <div class="role">independent replica &middot; same config &middot; same Valkey namespace</div>
+      <div class="apps">
+        <button class="app-btn app-a" data-gw="a" data-app="app-a">Send as app-a</button>
+        <button class="app-btn app-b" data-gw="a" data-app="app-b">Send as app-b</button>
+        <button class="app-btn app-c" data-gw="a" data-app="app-c">Send as app-c</button>
+      </div>
+    </div>
+    <div class="gw">
+      <h2>Gateway B</h2>
+      <div class="role">independent replica &middot; same config &middot; same Valkey namespace</div>
+      <div class="apps">
+        <button class="app-btn app-a" data-gw="b" data-app="app-a">Send as app-a</button>
+        <button class="app-btn app-b" data-gw="b" data-app="app-b">Send as app-b</button>
+        <button class="app-btn app-c" data-gw="b" data-app="app-c">Send as app-c</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="budgets">
+    <div class="budget-card app-a" id="budget-app-a">
+      <div class="name">app-a</div>
+      <div class="state idle" id="state-app-a">idle</div>
+      <div class="detail" id="detail-app-a">no requests yet</div>
+    </div>
+    <div class="budget-card app-b" id="budget-app-b">
+      <div class="name">app-b</div>
+      <div class="state idle" id="state-app-b">idle</div>
+      <div class="detail" id="detail-app-b">no requests yet</div>
+    </div>
+    <div class="budget-card app-c" id="budget-app-c">
+      <div class="name">app-c</div>
+      <div class="state idle" id="state-app-c">idle</div>
+      <div class="detail" id="detail-app-c">no requests yet</div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="run-scenario">Run scenario: shared budget, per-app isolation, and window recovery (~15s)</button>
+  </div>
+
+  <div id="log"></div>
+
+<script>
+  const logEl = document.getElementById('log');
+
+  function logRow(text, cls) {
+    const row = document.createElement('div');
+    row.className = 'row' + (cls ? ' ' + cls : '');
+    row.textContent = text;
+    logEl.appendChild(row);
+    logEl.scrollTop = logEl.scrollHeight;
+    return row;
+  }
+
+  function stepLabel(text) {
+    logRow(text, 'step');
+  }
+
+  async function sendRequest(gw, app) {
+    const path = gw === 'a' ? '/a/v1/chat/completions' : '/b/v1/chat/completions';
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { 'x-app-id': app, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    const remaining = res.headers.get('x-ratelimit-remaining-tokens');
+    const limit = res.headers.get('x-ratelimit-limit-tokens');
+    const retryAfter = res.headers.get('retry-after');
+    const admitted = res.status === 200;
+    const gwLabel = gw === 'a' ? 'Gateway A' : 'Gateway B';
+
+    logRow(
+      `${gwLabel} ${app}: HTTP ${res.status}${admitted ? ' (admitted)' : ' (denied)'}` +
+        (remaining !== null ? ` — remaining=${remaining}/${limit} retry-after=${retryAfter}s` : ''),
+      admitted ? 'ok' : 'denied',
+    );
+
+    const stateEl = document.getElementById('state-' + app);
+    const detailEl = document.getElementById('detail-' + app);
+    stateEl.textContent = admitted ? 'admitted' : 'denied';
+    stateEl.className = 'state ' + (admitted ? 'admitted' : 'denied');
+    detailEl.textContent = admitted
+      ? `last admitted on ${gwLabel}`
+      : `denied on ${gwLabel} — remaining ${remaining}/${limit} tokens, retry after ${retryAfter}s`;
+
+    return { admitted, remaining, limit, retryAfter, status: res.status };
+  }
+
+  document.querySelectorAll('.app-btn').forEach(btn => {
+    btn.addEventListener('click', () => sendRequest(btn.dataset.gw, btn.dataset.app));
+  });
+
+  // Must exceed the filter's configured `window` (10s in config.yaml) so
+  // app-a's original reservation has fully aged out of the sliding window
+  // before the recovery retry -- verified empirically against the live
+  // stack: recovers at t=11s with window=10s (10s + request overhead).
+  const WINDOW_RECOVERY_MS = 11500;
+
+  async function runScenario() {
+    const runBtn = document.getElementById('run-scenario');
+    runBtn.disabled = true;
+    logEl.innerHTML = '';
+    window.__scenarioResults = [];
+    const scenarioStart = Date.now();
+
+    stepLabel('Step 1: app-a sends its first request via Gateway A (expect 200 — budget admitted)');
+    window.__scenarioResults.push(await sendRequest('a', 'app-a'));
+    await new Promise(r => setTimeout(r, 1500));
+
+    stepLabel('Step 2: app-a sends its next request via Gateway B, the OTHER process (expect 429 — shared Valkey budget already exhausted)');
+    window.__scenarioResults.push(await sendRequest('b', 'app-a'));
+    await new Promise(r => setTimeout(r, 1500));
+
+    stepLabel('Step 3: app-b sends a request via Gateway B (expect 200 — unaffected by app-a exhausting its own budget)');
+    window.__scenarioResults.push(await sendRequest('b', 'app-b'));
+    await new Promise(r => setTimeout(r, 1500));
+
+    stepLabel('Step 4: app-c sends a request via Gateway A (expect 200 — its own independent budget, unaffected by app-a or app-b)');
+    window.__scenarioResults.push(await sendRequest('a', 'app-c'));
+
+    stepLabel("Step 5: waiting for the window: 10s sliding window to pass since app-a's original reservation, so it ages out on its own — no manual reset...");
+    const elapsedSoFar = Date.now() - scenarioStart;
+    const waitMs = Math.max(WINDOW_RECOVERY_MS - elapsedSoFar, 0);
+    await new Promise(r => setTimeout(r, waitMs));
+
+    stepLabel("Step 6: app-a retries on Gateway A (expect 200 — the window slid past its earlier reservation; nothing was manually reset)");
+    window.__scenarioResults.push(await sendRequest('a', 'app-a'));
+
+    stepLabel('Scenario complete: one shared Valkey ledger, three isolated per-app budgets, enforced consistently across both gateway replicas -- and budgets recover on their own as the window slides forward.');
+    window.__scenarioDone = true;
+    runBtn.disabled = false;
+  }
+
+  document.getElementById('run-scenario').addEventListener('click', runScenario);
+</script>
+</body>
+</html>
