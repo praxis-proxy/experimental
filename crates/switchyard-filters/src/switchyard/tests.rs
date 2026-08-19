@@ -447,7 +447,7 @@ async fn fail_open_passes_through_non_json_bodies() {
     let mut body = Some(original.clone());
     let action = filter.on_request_body(&mut ctx, &mut body, true).await.unwrap();
     assert!(matches!(action, FilterAction::Continue), "fail-open continues");
-    assert_eq!(body.as_ref().unwrap(), &original, "unparseable body forwarded as-is");
+    assert_eq!(body.as_ref().unwrap(), &original, "unparsable body forwarded as-is");
     assert!(ctx.get_metadata(METADATA_ERROR).is_some(), "the reason is recorded");
 }
 
