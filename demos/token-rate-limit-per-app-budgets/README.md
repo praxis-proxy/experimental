@@ -5,9 +5,16 @@
 > ledger and bucket-key architecture and inform the design questions
 > still open on [ai#658](https://github.com/praxis-proxy/ai/pull/658),
 > the canonical Token Rate Limiting proposal. It is not the final
-> upstream design — see "Current scope" below. Configuration and
-> behavior are expected to change as the proposal is reviewed and
-> implemented upstream.
+> upstream design — see "Current scope" and "Open design questions"
+> below. Configuration and behavior are expected to change, possibly
+> substantially, as the proposal is reviewed and implemented upstream.
+>
+> **The `token_rate_limit` code this demo exercises has not landed in
+> `praxis-ai` (or any upstream repo) yet.** It only exists on a personal
+> fork branch. "Build and run" below is not optional boilerplate — you
+> cannot build this demo's gateway image without pointing at that
+> branch, because `main` does not have this filter's sliding-window/
+> Valkey support at all.
 
 This demo runs **two independent Praxis AI gateway instances** sharing
 one Valkey-backed `token_rate_limit` budget per application — the
@@ -77,12 +84,13 @@ questions from the routing-layer questions the other demo explores.
 
 ## Recorded walkthrough
 
-A narrated recording of the scenario below (`recording/output/final.mp4`),
-driven by a live browser against a real running instance of this stack, not
-staged -- see `recording/RECORDING.md` for what it proves and how to
-reproduce it. `dashboard/` is a browser-facing convenience used only for
-that recording; it wraps the same HTTP contract as the curl walkthrough
-below and is not part of the Praxis AI filter chain.
+A narrated recording of the scenario below
+(`recording/output/sliding-window-based-token-rate-limit.mp4`), driven by a
+live browser against a real running instance of this stack, not staged --
+see `recording/RECORDING.md` for what it proves and how to reproduce it.
+`dashboard/` is a browser-facing convenience used only for that recording;
+it wraps the same HTTP contract as the curl walkthrough below and is not
+part of the Praxis AI filter chain.
 
 ## Prerequisites
 
@@ -259,25 +267,60 @@ thread, not as a substitute for it:
 
 ## Open design questions
 
-- **Algorithm choice is not yet specified by ai#658/ai#121.** This demo
-  and the source branch implement a sliding window unconditionally.
-  Neither the epic ([ai#121](https://github.com/praxis-proxy/ai/issues/121))
+These are unresolved as of this writing. Expect this demo's behavior,
+config shape, or scope to change once they're settled — treat it as a
+snapshot of one point in an ongoing design discussion, not a preview of
+the final feature.
+
+- **Per-rule algorithm choice: direction is confirmed, implementation is
+  not.** Neither the epic ([ai#121](https://github.com/praxis-proxy/ai/issues/121))
   nor the proposal ([ai#658](https://github.com/praxis-proxy/ai/pull/658))
-  says whether `token_rate_limit` should support only sliding window, or
-  let an operator pick an algorithm (sliding window, token bucket, fixed
-  window) per rule. [praxis#551](https://github.com/praxis-proxy/praxis/issues/551) —
-  a separate, core-proxy rate-limit issue — already proposes both a
-  configurable window duration and independent per-rule algorithm
-  choice; whether that same principle should extend to `token_rate_limit`
-  is an open question worth raising against praxis#551 or ai#658 for
-  maintainer input, not something this demo or its source branch decide
-  unilaterally.
+  originally said whether `token_rate_limit` should support only sliding
+  window, or let an operator pick an algorithm (sliding window, token
+  bucket, fixed window) per rule. Since this demo was built, we got
+  confirmation that mixed per-app algorithm choice is a real requirement
+  (one app on sliding window, another on token bucket, same deployment)
+  and captured it as a comment on
+  [praxis#551](https://github.com/praxis-proxy/praxis/issues/551). **This
+  demo and its source branch still implement sliding window
+  unconditionally** — per-rule algorithm selection is not built. Don't
+  read the current single-algorithm behavior as a decision against
+  mixed algorithms; it's just not implemented yet.
 - **Window duration is a config knob, not yet a customer-tunable
   requirement anywhere in the proposal.** This demo uses `window: 10s`
   purely to make the recovery visible in a short recording; nothing in
   ai#658 pins the value, and calendar-aligned windows (e.g. reset at UTC
   midnight rather than "most recent N seconds") are a distinct semantic
   that sliding window does not provide and hasn't been requested yet.
+- **The Valkey backend is a spike, not yet aligned with
+  [grid#83](https://github.com/praxis-proxy/grid/issues/83)**, the
+  authoritative spec for Valkey-backed distributed quota state (published
+  after this demo's backend was first written). Concretely, against
+  grid#83's requirements:
+  - *Met:* atomic reserve/reconcile via Lua (`EVAL`), idempotent
+    reconciliation (a reservation can only be settled once), reservation
+    TTL + cleanup for abandoned requests, and **fail-closed on backend
+    error** — a Valkey timeout or error returns `503`, not silent
+    admission (see `on_request` in the source branch's `mod.rs`).
+  - *Not met, by deliberate demo simplification:* this compose stack's
+    Valkey runs with **no authentication** and **`--save ""`
+    (persistence disabled)** — see `docker-compose.yml`. grid#83 requires
+    explicit auth, private network access, and documented durable
+    storage/backup behavior; this demo proves none of that, only the
+    reservation/reconciliation logic on top of an ephemeral, unauthenticated
+    instance.
+  - *Not exercised by this demo's walkthrough or test suite:* grid#83's
+    validation checklist also asks for proof that usage survives a
+    consumer restart, that concurrent reservations can't oversubscribe
+    capacity under load, and that a Valkey outage-then-recovery cycle
+    fails closed and then resumes without resetting existing usage. None
+    of those are demonstrated here — only the steady-state admit/deny/
+    recover-on-window-slide path is.
+  - *Config gap:* the backend/Lua layer already supports multiple atomic
+    budgets per key (`Vec<Budget>`), but `token_rate_limit`'s own config
+    schema only exposes a single `window`/`capacity` pair per rule today —
+    multi-window enforcement exists underneath but isn't wired up to
+    configuration yet.
 
 ## Related work
 
@@ -285,6 +328,7 @@ thread, not as a substitute for it:
 - [ai#129: Per-header rate limit bucket keys](https://github.com/praxis-proxy/ai/issues/129)
 - [ai#121: Epic — Token Rate Limiting](https://github.com/praxis-proxy/ai/issues/121)
 - [praxis#551: Sliding window rate limiting](https://github.com/praxis-proxy/praxis/issues/551)
+- [grid#83: Support Valkey-backed distributed quota state](https://github.com/praxis-proxy/grid/issues/83)
 - [Source branch](https://github.com/jordigilh/praxis-ai/tree/jordigilh/token-rate-limit-per-app-budgets)
 - [Distributed token rate limiting with Grid routing](../grid-distributed-token-rate-limit/README.md):
   a complementary demo exploring distributed counters, authentication,
