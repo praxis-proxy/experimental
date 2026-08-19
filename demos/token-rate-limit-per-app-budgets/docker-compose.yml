@@ -1,0 +1,101 @@
+# Two independent Praxis AI gateway instances, sharing one Valkey-backed
+# sliding-window ledger for the token_rate_limit filter -- the "final
+# scenario" for per-app budgets (ai#129 keying + the ai#658 sliding-window
+# design), demonstrating that an app's budget is enforced consistently no
+# matter which gateway replica its traffic happens to land on.
+#
+# `PRAXIS_AI_SRC` must point at a checkout of the source branch (see
+# README.md's "Build and run" section); it's only needed to build the
+# gateway image, not at runtime.
+
+services:
+  valkey:
+    image: docker.io/valkey/valkey:8-alpine
+    command: ["valkey-server", "--save", ""]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    networks: [demo]
+
+  # Minimal OpenAI-shaped backend so admitted requests get a real 200
+  # with token usage data, exercising reservation reconciliation as well
+  # as admission/denial. Deliberately reports a small, fixed usage value
+  # (not `estimate_tokens`) so the walkthrough's reconciliation-refund
+  # math is easy to follow by hand.
+  backend:
+    image: docker.io/library/python:3.13-alpine
+    working_dir: /srv
+    command:
+      - python3
+      - -c
+      - |
+        import json
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        BODY = json.dumps({
+            "id": "demo-completion",
+            "object": "chat.completion",
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10},
+        }).encode()
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(BODY)))
+                self.end_headers()
+                self.wfile.write(BODY)
+
+            def log_message(self, *_args):
+                pass
+
+        HTTPServer(("0.0.0.0", 3000), Handler).serve_forever()
+    networks: [demo]
+
+  gateway-a:
+    build:
+      context: ${PRAXIS_AI_SRC:-../../../praxis-ai-trl-demo}
+      dockerfile: Containerfile
+    image: praxis-ai-trl-demo:local
+    environment:
+      TOKEN_RATE_LIMIT_VALKEY_URL: redis://valkey:6379
+    volumes:
+      - ./config.yaml:/etc/praxis/config.yaml:ro
+    command: ["-c", "/etc/praxis/config.yaml"]
+    ports:
+      - "8080:8080"
+    depends_on:
+      valkey:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    networks: [demo]
+
+  # Same image, same config, same Valkey backend as gateway-a -- an
+  # independent replica, not a hot spare. Its only relationship to
+  # gateway-a is sharing the built image tag (see README.md).
+  gateway-b:
+    image: praxis-ai-trl-demo:local
+    environment:
+      TOKEN_RATE_LIMIT_VALKEY_URL: redis://valkey:6379
+    volumes:
+      - ./config.yaml:/etc/praxis/config.yaml:ro
+    command: ["-c", "/etc/praxis/config.yaml"]
+    ports:
+      - "8081:8080"
+    depends_on:
+      valkey:
+        condition: service_healthy
+      backend:
+        condition: service_started
+      gateway-a:
+        condition: service_started
+    networks: [demo]
+
+networks:
+  demo: {}
