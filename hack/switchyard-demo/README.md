@@ -43,10 +43,17 @@ dropped from the rendered config.
 The script renders `praxis.yaml` from `praxis.yaml.template`, starts the
 upstreams and the composed `switchyard-server` (gateway on
 `127.0.0.1:18080`), and runs four turns: an easy question (expect
-`weak-upstream` / `qwen-mini`), a hard question (expect `strong-upstream` /
+`weak-cluster` / `qwen-mini`), a hard question (expect `strong-cluster` /
 `qwen-max`), the same easy question again in the same session (the
 no-downgrade floor must hold `strong`), and an easy question in a fresh
 session (isolated; back to `weak`).
+
+The demo config sets `session_floor.escalation_ratchet: true`, so turn 3
+holds `strong` **without calling the judge at all** — the floor already
+forces `strong`, so re-judging would only pay to re-derive it. Confirm the
+skip with `grep 'ratchet held' server.log`; you'll see three judge calls,
+not four. The flag is off by default (Switchyard judges every turn); see
+"The judge tax, and the escalation ratchet" in `docs/switchyard-route.md`.
 
 Filter logs land in `server.log`; the runner sets
 `RUST_LOG=info,switchyard_filters=debug` so each successful routing

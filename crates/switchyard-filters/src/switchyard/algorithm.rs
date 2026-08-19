@@ -17,9 +17,17 @@ pub(crate) const JUDGE_TAG: &str = "judge";
 /// Built **once** at `from_config` time: the algorithm owns per-session state
 /// machinery (with an internal hourly sweeper task spawned on first use) that
 /// must not be re-created per request — and none of it affects routing while
-/// `session_affinity` stays `false`, which it must (Switchyard's affinity is a
-/// first-decision-wins latch, not a ratchet; the session floor in `floor.rs`
-/// owns the no-downgrade guarantee instead).
+/// `session_affinity` stays `false`, which it must. Plain `session_affinity`
+/// wires Switchyard's `AffinityRouter::new()`, a first-decision-wins latch that
+/// would pin a session to whatever it decided first (including `weak`) — the
+/// wrong shape for a no-downgrade guarantee. Switchyard *does* ship a directional
+/// escalation latch (`AffinityRouter::with_latch_only(["strong"])`), but it keys
+/// on request metadata and lives inside the classifier cascade, whereas this
+/// filter drives the algorithm per call via `run_stream` and keeps session state
+/// in `floor.rs`, keyed by the session header. So the floor owns the
+/// no-downgrade guarantee, and the optional judge-skip on an already-strong
+/// session (`session_floor.escalation_ratchet`) is the same escalation-latch
+/// behaviour expressed against that store.
 ///
 /// # Errors
 ///

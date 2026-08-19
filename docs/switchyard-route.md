@@ -66,6 +66,7 @@ filter_chains:
           enabled: true              # default true
           ttl_secs: 3600             # inactivity eviction (default 1 h)
           exclude_below: true        # also bar weak inside Switchyard
+          escalation_ratchet: false  # skip the judge once floored strong (default false)
         on_failure: open             # open | closed (default open)
         max_body_bytes: 1048576      # StreamBuffer cap (default 1 MiB)
         session_header: x-switchyard-session-id
@@ -114,6 +115,35 @@ filter therefore owns the guarantee, in two layers:
    `max(floor, decision)` — the ratchet only moves up. With
    `exclude_below: true` the below-floor tier is additionally excluded
    inside Switchyard for that turn.
+
+### The judge tax, and the escalation ratchet
+
+The Capability classifier calls the judge on **every** turn — that is
+Switchyard's default, and this filter's. The judge is itself an LLM call, so
+routing only saves money when the judge is cheap relative to the
+weak↔strong gap, amortized over your traffic. A large frontier judge on
+every turn can cost more than it saves, especially on the easy turns that
+route `weak`.
+
+One slice of that cost is pure waste: once a session is floored at `strong`,
+the clamp forces `strong` regardless of what the judge says, so re-judging it
+spends a call to re-derive a foregone answer. `escalation_ratchet: true`
+skips the judge entirely on any turn whose floor is already `strong` and
+routes `strong` directly. It is **off by default** (matching Switchyard
+vanilla); turn it on to stop the wasted spend, at the cost of the
+(already-decided) per-turn verdict in the logs.
+
+This is deliberately the filter-side equivalent of Switchyard's own
+escalation latch, `AffinityRouter::with_latch_only(["strong"])` — a
+*directional* affinity that retains only the strong tier and never the weak
+one. We express it against the filter's floor store (keyed by
+`session_header`) rather than adopting `AffinityRouter`, which keys on
+request metadata and lives inside the classifier cascade the `run_stream`
+decision-only design bypasses. Same behaviour, no duplicated session state.
+
+Note it does **not** help the costs it can't: the first `strong` turn and
+every `weak` turn still judge. If most traffic is one-shot or always-easy,
+prefer a cheaper judge or a non-LLM pre-filter over this flag.
 
 **Honesty note for operators:** the floor cache has the same loss profile as
 Switchyard's own state — a process restart, config reload, failover, or
@@ -177,8 +207,13 @@ Transcript (recorded 2026-08-18 against this revision, judge =
 
 The client sent `"model": "agent-default"` on every turn; what each
 upstream *received* is the tier model the filter wrote. Turns 1/2/4 are the
-judge's real classification; turn 3 is the host-side floor overriding a
-judge that would have said `weak`.
+judge's real classification; turn 3 is the host-side floor holding `strong`.
+
+This transcript predates the escalation ratchet, so turn 3 there reached the
+judge and had its `weak` verdict *clamped* up. The demo config now sets
+`session_floor.escalation_ratchet: true`, so on a fresh run turn 3 skips the
+judge entirely (`grep 'ratchet held' server.log` — three judge calls, not
+four) and still holds `strong`. Same routing outcome, one fewer judge call.
 
 Judge-model realities observed while recording: a thinking model
 (`qwen3:8b`) blew a 20 s judge deadline on the hard prompt — the filter

@@ -159,9 +159,17 @@ impl SwitchyardRouteFilter {
         let session = self.session_id(ctx);
         let now = Instant::now();
         let floor = self.session_floor(session.as_deref(), now);
-        let tag = self.decide(ctx, format, &value, floor).await?;
-        let tier = Tier::from_tag(&tag).ok_or(RouteError::UnknownTier(tag))?;
-        let chosen = floor.map_or(tier, |held| held.max(tier));
+        let chosen = if self.ratchet_holds(floor) {
+            // Escalation ratchet: a session already floored at the top tier can
+            // only stay there, so the judge verdict is predetermined. Skip the
+            // callout entirely rather than pay to re-derive it and discard it.
+            debug!("switchyard_route: escalation ratchet held; judge skipped");
+            Tier::Strong
+        } else {
+            let tag = self.decide(ctx, format, &value, floor).await?;
+            let tier = Tier::from_tag(&tag).ok_or(RouteError::UnknownTier(tag))?;
+            floor.map_or(tier, |held| held.max(tier))
+        };
         self.commit_floor(ctx, session.as_deref(), chosen, now);
         self.apply(ctx, body, &mut value, chosen)
     }
@@ -212,6 +220,12 @@ impl SwitchyardRouteFilter {
             "switchyard_route: routed"
         );
         Ok(())
+    }
+
+    /// Whether the escalation ratchet lets us skip the judge for this turn:
+    /// enabled, and the session is already floored at the top tier.
+    fn ratchet_holds(&self, floor: Option<Tier>) -> bool {
+        self.config.session_floor.escalation_ratchet && floor == Some(Tier::Strong)
     }
 
     /// Reads the session id from the configured header, if present.

@@ -171,6 +171,15 @@ on_failure: {failure_mode}
     )
 }
 
+/// Filter YAML like [`filter_yaml`], with the escalation ratchet enabled so a
+/// strong-floored session skips the judge entirely.
+fn ratchet_yaml(endpoint: &str) -> String {
+    format!(
+        "{}session_floor:\n  escalation_ratchet: true\n",
+        filter_yaml(endpoint, "open")
+    )
+}
+
 /// Builds the filter from YAML text.
 fn build_filter(yaml: &str) -> Box<dyn HttpFilter> {
     let value: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
@@ -560,6 +569,58 @@ async fn a_strong_session_never_downgrades() {
     );
     assert_eq!(metadata.get(METADATA_TIER).map(String::as_str), Some("strong"));
     stub.join();
+}
+
+#[tokio::test]
+async fn the_escalation_ratchet_skips_the_judge_once_strong() {
+    // Only ONE verdict is scripted, yet TWO turns run. The stub serves exactly
+    // as many connections as scripted, so a second judge call would hang the
+    // turn waiting for a response that never comes. That it completes — and that
+    // exactly one request is captured — proves the ratcheted turn skipped the
+    // judge entirely, not merely that its verdict was discarded.
+    let stub = JudgeStub::spawn(vec![strong_verdict()]);
+    let filter = build_filter(&ratchet_yaml(&stub.endpoint));
+    let client = subrequest_client();
+    let session = &[("x-switchyard-session-id", "session-ratchet-skip")];
+
+    let (_, first_body, _) =
+        run_body_phase(filter.as_ref(), &client, "/v1/chat/completions", session, openai_body()).await;
+    assert_eq!(body_model(first_body.as_ref()), "model-strong", "turn 1 reaches strong");
+
+    let (_, second_body, metadata) =
+        run_body_phase(filter.as_ref(), &client, "/v1/chat/completions", session, openai_body()).await;
+    assert_eq!(
+        body_model(second_body.as_ref()),
+        "model-strong",
+        "turn 2 stays strong with no judge call"
+    );
+    assert_eq!(metadata.get(METADATA_TIER).map(String::as_str), Some("strong"));
+
+    let captured = stub.join();
+    assert_eq!(
+        captured.len(),
+        1,
+        "the judge was called exactly once, not on the ratcheted turn"
+    );
+}
+
+#[tokio::test]
+async fn without_the_ratchet_a_strong_session_still_judges_every_turn() {
+    // The default (ratchet off) is Switchyard vanilla: the judge runs every
+    // turn even on a strong-floored session. Two verdicts are scripted and both
+    // must be consumed; the floor clamps the weak second verdict up to strong.
+    let stub = JudgeStub::spawn(vec![strong_verdict(), weak_verdict()]);
+    let filter = build_filter(&filter_yaml(&stub.endpoint, "open"));
+    let client = subrequest_client();
+    let session = &[("x-switchyard-session-id", "session-no-ratchet")];
+
+    for _ in 0..2 {
+        let (_action, _body, _metadata) =
+            run_body_phase(filter.as_ref(), &client, "/v1/chat/completions", session, openai_body()).await;
+    }
+
+    let captured = stub.join();
+    assert_eq!(captured.len(), 2, "vanilla behaviour judges both turns");
 }
 
 #[tokio::test]

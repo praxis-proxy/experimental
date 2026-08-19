@@ -128,6 +128,14 @@ impl TargetsConfig {
 }
 
 /// The host-owned no-downgrade ratchet (session floor) configuration.
+///
+/// The three flags are independent on/off deserialization knobs a YAML author
+/// sets directly, so plain `bool`s are the honest shape here; folding them into
+/// two-variant enums would only obscure the config surface.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent YAML config toggles, not a state machine"
+)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionFloorConfig {
@@ -141,6 +149,19 @@ pub(crate) struct SessionFloorConfig {
     /// `Context::exclude_target` (belt-and-suspenders with the post-hoc clamp).
     #[serde(default = "default_true")]
     pub(crate) exclude_below: bool,
+    /// Skip the judge callout entirely once a session is floored at the top
+    /// tier, since its verdict is then predetermined by the clamp.
+    ///
+    /// Off by default: Switchyard's own Capability routing judges every turn,
+    /// and so does this filter unless you opt in. When enabled this is the
+    /// filter-side equivalent of Switchyard's escalation latch
+    /// (`AffinityRouter::with_latch_only(["strong"])`): a session that has
+    /// reached `strong` can only stay `strong`, so re-judging it spends a judge
+    /// call to re-derive an answer the floor already forces. Turning this on
+    /// stops that spend at the cost of the (already-decided) per-turn verdict in
+    /// the logs. Has no effect unless the floor is `enabled`.
+    #[serde(default)]
+    pub(crate) escalation_ratchet: bool,
 }
 
 impl Default for SessionFloorConfig {
@@ -149,6 +170,7 @@ impl Default for SessionFloorConfig {
             enabled: true,
             ttl_secs: default_floor_ttl_secs(),
             exclude_below: true,
+            escalation_ratchet: false,
         }
     }
 }
@@ -419,6 +441,10 @@ targets:
         assert!(config.session_floor.enabled, "session floor defaults on");
         assert_eq!(config.session_floor.ttl_secs, 3_600, "default floor TTL is 1h");
         assert!(config.session_floor.exclude_below, "exclude_below defaults on");
+        assert!(
+            !config.session_floor.escalation_ratchet,
+            "escalation ratchet defaults off (Switchyard vanilla: judge every turn)"
+        );
         assert_eq!(config.judge.timeout_ms, 2_000, "default judge timeout");
         assert_eq!(config.judge.max_response_bytes, 65_536, "default judge response cap");
     }
@@ -453,6 +479,20 @@ session_header: x-my-session
         );
         assert!(!config.session_floor.exclude_below, "exclude_below parsed");
         assert_eq!(config.session_header, "x-my-session", "session header parsed");
+    }
+
+    #[test]
+    fn escalation_ratchet_round_trips_when_enabled() {
+        let yaml = format!("{MINIMAL}\nsession_floor:\n  escalation_ratchet: true\n");
+        let config = parse(&yaml);
+        assert!(
+            config.session_floor.escalation_ratchet,
+            "escalation_ratchet opts in when set"
+        );
+        assert!(
+            config.session_floor.enabled,
+            "the floor stays on so the ratchet has a floor to key off"
+        );
     }
 
     #[test]

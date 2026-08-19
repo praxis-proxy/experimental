@@ -46,6 +46,11 @@ __JUDGE_AUTH_BLOCK__
           enabled: true
           ttl_secs: 3600
           exclude_below: true
+          # Once a session is floored strong, skip the judge entirely: its
+          # verdict is already foregone. Turn 3 of the demo shows this — the
+          # floor holds strong with NO judge call (grep the server log for
+          # "escalation ratchet held"). Off by default in the filter.
+          escalation_ratchet: true
         on_failure: open
       - filter: load_balancer
         clusters:

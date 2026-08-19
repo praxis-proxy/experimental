@@ -97,9 +97,10 @@ echo "--- turn 1: easy question, session demo-A (expect weak) ---"
 ask demo-A 'What is 2+2?'
 echo "--- turn 2: hard question, session demo-A (expect strong) ---"
 ask demo-A 'Prove that every finitely generated group acting freely on a tree is free, and generalize to graphs of groups.'
-echo "--- turn 3: easy question again, session demo-A (the floor must HOLD strong) ---"
+echo "--- turn 3: easy question again, session demo-A (floor HOLDS strong; judge SKIPPED) ---"
 ask demo-A 'What is 3+3?'
 echo "--- turn 4: easy question, fresh session demo-B (isolated; expect weak) ---"
 ask demo-B 'What is 4+4?'
 echo
 echo "filter decisions and fail-open reasons: grep switchyard_route server.log"
+echo "turn 3 skipped the judge (escalation ratchet): grep 'ratchet held' server.log"
