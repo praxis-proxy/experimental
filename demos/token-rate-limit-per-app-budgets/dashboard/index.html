@@ -65,50 +65,50 @@
 </style>
 </head>
 <body>
-  <h1>Per-app token budgets — shared across gateway replicas</h1>
-  <p class="subtitle">One <code>token_rate_limit</code> rule, keyed by <code>x-app-id</code>, backed by a shared Valkey sliding-window ledger.</p>
+  <h1>Per-app token budgets — mixed algorithms, shared across gateway replicas</h1>
+  <p class="subtitle">Two <code>token_rate_limit</code> rules matched by <code>x-tier</code>, each keyed by <code>x-app-id</code>: <strong>gold-tier</strong> (sliding_window) for app-a/app-c, <strong>silver-tier</strong> (token_bucket) for app-b — both backed by the same shared Valkey namespace.</p>
 
   <div class="topology">
     <div class="gw">
       <h2>Gateway A</h2>
       <div class="role">independent replica &middot; same config &middot; same Valkey namespace</div>
       <div class="apps">
-        <button class="app-btn app-a" data-gw="a" data-app="app-a">Send as app-a</button>
-        <button class="app-btn app-b" data-gw="a" data-app="app-b">Send as app-b</button>
-        <button class="app-btn app-c" data-gw="a" data-app="app-c">Send as app-c</button>
+        <button class="app-btn app-a" data-gw="a" data-app="app-a">Send as app-a (gold)</button>
+        <button class="app-btn app-b" data-gw="a" data-app="app-b">Send as app-b (silver)</button>
+        <button class="app-btn app-c" data-gw="a" data-app="app-c">Send as app-c (gold)</button>
       </div>
     </div>
     <div class="gw">
       <h2>Gateway B</h2>
       <div class="role">independent replica &middot; same config &middot; same Valkey namespace</div>
       <div class="apps">
-        <button class="app-btn app-a" data-gw="b" data-app="app-a">Send as app-a</button>
-        <button class="app-btn app-b" data-gw="b" data-app="app-b">Send as app-b</button>
-        <button class="app-btn app-c" data-gw="b" data-app="app-c">Send as app-c</button>
+        <button class="app-btn app-a" data-gw="b" data-app="app-a">Send as app-a (gold)</button>
+        <button class="app-btn app-b" data-gw="b" data-app="app-b">Send as app-b (silver)</button>
+        <button class="app-btn app-c" data-gw="b" data-app="app-c">Send as app-c (gold)</button>
       </div>
     </div>
   </div>
 
   <div class="budgets">
     <div class="budget-card app-a" id="budget-app-a">
-      <div class="name">app-a</div>
+      <div class="name">app-a &middot; gold-tier (sliding_window)</div>
       <div class="state idle" id="state-app-a">idle</div>
       <div class="detail" id="detail-app-a">no requests yet</div>
     </div>
     <div class="budget-card app-b" id="budget-app-b">
-      <div class="name">app-b</div>
+      <div class="name">app-b &middot; silver-tier (token_bucket)</div>
       <div class="state idle" id="state-app-b">idle</div>
       <div class="detail" id="detail-app-b">no requests yet</div>
     </div>
     <div class="budget-card app-c" id="budget-app-c">
-      <div class="name">app-c</div>
+      <div class="name">app-c &middot; gold-tier (sliding_window)</div>
       <div class="state idle" id="state-app-c">idle</div>
       <div class="detail" id="detail-app-c">no requests yet</div>
     </div>
   </div>
 
   <div class="controls">
-    <button id="run-scenario">Run scenario: shared budget, per-app isolation, and window recovery (~15s)</button>
+    <button id="run-scenario">Run scenario: mixed algorithms, shared budgets, per-app isolation, and per-algorithm recovery (~15s)</button>
   </div>
 
   <div id="log"></div>
@@ -129,11 +129,15 @@
     logRow(text, 'step');
   }
 
+  // Which token_rate_limit rule (and therefore algorithm) each app's
+  // traffic is routed to via the x-tier match header -- see ../config.yaml.
+  const TIER_BY_APP = { 'app-a': 'gold', 'app-c': 'gold', 'app-b': 'silver' };
+
   async function sendRequest(gw, app) {
     const path = gw === 'a' ? '/a/v1/chat/completions' : '/b/v1/chat/completions';
     const res = await fetch(path, {
       method: 'POST',
-      headers: { 'x-app-id': app, 'Content-Type': 'application/json' },
+      headers: { 'x-app-id': app, 'x-tier': TIER_BY_APP[app], 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'hi' }] }),
     });
     const remaining = res.headers.get('x-ratelimit-remaining-tokens');
@@ -163,11 +167,16 @@
     btn.addEventListener('click', () => sendRequest(btn.dataset.gw, btn.dataset.app));
   });
 
-  // Must exceed the filter's configured `window` (10s in config.yaml) so
+  // Must exceed gold-tier's configured `window` (10s in config.yaml) so
   // app-a's original reservation has fully aged out of the sliding window
   // before the recovery retry -- verified empirically against the live
   // stack: recovers at t=11s with window=10s (10s + request overhead).
-  const WINDOW_RECOVERY_MS = 11500;
+  // This also covers silver-tier's token_bucket refill (capacity=40,
+  // refill_rate=8/s): its own recovery lands well before this, since a
+  // token bucket refills continuously rather than waiting out a fixed
+  // window -- see step 8 below for what that difference looks like in
+  // practice.
+  const RECOVERY_WAIT_MS = 11500;
 
   async function runScenario() {
     const runBtn = document.getElementById('run-scenario');
@@ -176,7 +185,7 @@
     window.__scenarioResults = [];
     const scenarioStart = Date.now();
 
-    stepLabel('Step 1: app-a sends its first request via Gateway A (expect 200 — budget admitted)');
+    stepLabel('Step 1: app-a (gold-tier, sliding_window) sends its first request via Gateway A (expect 200 — budget admitted)');
     window.__scenarioResults.push(await sendRequest('a', 'app-a'));
     await new Promise(r => setTimeout(r, 1500));
 
@@ -184,22 +193,29 @@
     window.__scenarioResults.push(await sendRequest('b', 'app-a'));
     await new Promise(r => setTimeout(r, 1500));
 
-    stepLabel('Step 3: app-b sends a request via Gateway B (expect 200 — unaffected by app-a exhausting its own budget)');
-    window.__scenarioResults.push(await sendRequest('b', 'app-b'));
+    stepLabel('Step 3: app-c (gold-tier, sliding_window) sends a request via Gateway A (expect 200 — its own independent budget, same algorithm as app-a but unaffected by it)');
+    window.__scenarioResults.push(await sendRequest('a', 'app-c'));
     await new Promise(r => setTimeout(r, 1500));
 
-    stepLabel('Step 4: app-c sends a request via Gateway A (expect 200 — its own independent budget, unaffected by app-a or app-b)');
-    window.__scenarioResults.push(await sendRequest('a', 'app-c'));
+    stepLabel('Step 4: app-b (silver-tier, token_bucket) sends its first request via Gateway A (expect 200 — a different algorithm, matched via x-tier: silver, own budget)');
+    window.__scenarioResults.push(await sendRequest('a', 'app-b'));
+    await new Promise(r => setTimeout(r, 1500));
 
-    stepLabel("Step 5: waiting for the window: 10s sliding window to pass since app-a's original reservation, so it ages out on its own — no manual reset...");
+    stepLabel('Step 5: app-b sends its next request via Gateway B, the OTHER process (expect 429 — the shared-Valkey guarantee holds for token_bucket too, not just sliding_window)');
+    window.__scenarioResults.push(await sendRequest('b', 'app-b'));
+
+    stepLabel("Step 6: waiting for gold-tier's window: 10s sliding window to pass since app-a's original reservation, so it ages out on its own — no manual reset...");
     const elapsedSoFar = Date.now() - scenarioStart;
-    const waitMs = Math.max(WINDOW_RECOVERY_MS - elapsedSoFar, 0);
+    const waitMs = Math.max(RECOVERY_WAIT_MS - elapsedSoFar, 0);
     await new Promise(r => setTimeout(r, waitMs));
 
-    stepLabel("Step 6: app-a retries on Gateway A (expect 200 — the window slid past its earlier reservation; nothing was manually reset)");
+    stepLabel("Step 7: app-a retries on Gateway A (expect 200 — the window slid past its earlier reservation; nothing was manually reset)");
     window.__scenarioResults.push(await sendRequest('a', 'app-a'));
 
-    stepLabel('Scenario complete: one shared Valkey ledger, three isolated per-app budgets, enforced consistently across both gateway replicas -- and budgets recover on their own as the window slides forward.');
+    stepLabel("Step 8: app-b retries on Gateway B (expect 200 — silver-tier's bucket refilled continuously at 8 tokens/sec rather than waiting out a fixed window, so it typically recovers sooner than gold-tier's cliff-edge window slide)");
+    window.__scenarioResults.push(await sendRequest('b', 'app-b'));
+
+    stepLabel('Scenario complete: one shared Valkey namespace, two independently-chosen algorithms (sliding_window vs token_bucket) per rule, three isolated per-app budgets, enforced consistently across both gateway replicas -- each algorithm recovers on its own terms, no manual reset.');
     window.__scenarioDone = true;
     runBtn.disabled = false;
   }
