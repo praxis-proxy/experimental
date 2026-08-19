@@ -16,11 +16,29 @@ upstreams:
 
 ## Run
 
+Keyless local judge (Ollama / vLLM / LM Studio):
+
 ```console
 $ JUDGE_ENDPOINT=http://127.0.0.1:11434/v1/chat/completions \
   JUDGE_MODEL=qwen3:8b \
   ./run-demo.sh
 ```
+
+Hosted judge that needs a bearer token (OpenAI, Together, Fireworks, …):
+
+```console
+$ JUDGE_ENDPOINT=https://api.openai.com/v1/chat/completions \
+  JUDGE_MODEL=gpt-4o-mini \
+  OPENAI_API_KEY=sk-... \
+  JUDGE_KEY_ENV=OPENAI_API_KEY \
+  ./run-demo.sh
+```
+
+`JUDGE_KEY_ENV` names the environment variable holding your token. The
+filter reads that variable at startup and sends it as
+`authorization: Bearer <token>`; the secret never lands in `praxis.yaml`.
+Leave `JUDGE_KEY_ENV` unset for a keyless judge and the auth block is
+dropped from the rendered config.
 
 The script renders `praxis.yaml` from `praxis.yaml.template`, starts the
 upstreams and the composed `switchyard-server` (gateway on
@@ -30,7 +48,10 @@ upstreams and the composed `switchyard-server` (gateway on
 no-downgrade floor must hold `strong`), and an easy question in a fresh
 session (isolated; back to `weak`).
 
-Filter logs (decisions and fail-open reasons) land in `server.log`.
+Filter logs land in `server.log`; the runner sets
+`RUST_LOG=info,switchyard_filters=debug` so each successful routing
+decision (`switchyard_route: routed tier=… cluster=… model=…`) is visible
+there, alongside any fail-open reasons. `grep switchyard_route server.log`.
 
 Note: turns 1 and 4 depend on the judge model's actual verdict — a weak
 judge model may classify conservatively. Turn 3 demonstrates the floor

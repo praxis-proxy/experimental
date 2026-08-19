@@ -48,6 +48,10 @@ filter_chains:
         judge:                       # required — the classifier callout
           endpoint: "http://judge.internal:8000/v1/chat/completions"
           model: qwen3-judge         # model id sent to the judge
+          auth:                      # optional — omit for a keyless judge
+            value_env: OPENAI_API_KEY  # env var holding the secret (required)
+            header: authorization      # default: authorization
+            scheme: Bearer             # default: Bearer ("" sends raw value)
           timeout_ms: 2000           # DNS + HTTP deadline (default 2000)
           max_response_bytes: 65536  # judge reply cap (default 64 KiB)
         threshold: 0.5               # classifier base threshold, [0,1]
@@ -82,6 +86,11 @@ Notes:
   forces a tier (see below).
 - Bodies over `max_body_bytes` are rejected with 413 by the `StreamBuffer`
   machinery itself, before the filter runs.
+- **Judge credentials never live in config.** `judge.auth.value_env` names an
+  environment variable; the value is read once at startup (a missing or empty
+  variable fails filter construction) and sent as `<scheme> <secret>` in the
+  configured header, marked sensitive so it is redacted from logs. Omit
+  `auth` entirely for a keyless judge (local vLLM/Ollama).
 
 ## The no-downgrade guarantee
 

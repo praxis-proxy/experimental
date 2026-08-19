@@ -48,6 +48,27 @@ impl Tier {
     }
 }
 
+/// Judge callout authentication.
+///
+/// A hosted OpenAI-compatible judge (OpenAI, Together, Fireworks, …) requires
+/// a bearer token. The secret itself is **never** written into YAML: config
+/// names the environment variable holding it (`value_env`), and the value is
+/// resolved once at filter construction time so a missing secret fails fast
+/// rather than silently sending an unauthenticated callout.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct JudgeAuthConfig {
+    /// Environment variable holding the credential (e.g. `OPENAI_API_KEY`).
+    pub(crate) value_env: String,
+    /// Header the credential is sent in.
+    #[serde(default = "default_auth_header")]
+    pub(crate) header: String,
+    /// Prefix prepended to the resolved value (e.g. `Bearer`). An empty string
+    /// sends the raw credential; a trailing space is added automatically.
+    #[serde(default = "default_auth_scheme")]
+    pub(crate) scheme: String,
+}
+
 /// Judge (classifier) callout configuration.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -56,6 +77,9 @@ pub(crate) struct JudgeConfig {
     pub(crate) endpoint: String,
     /// Model name substituted into the classifier request sent to the judge.
     pub(crate) model: String,
+    /// Optional credential for a hosted judge; absent for keyless endpoints.
+    #[serde(default)]
+    pub(crate) auth: Option<JudgeAuthConfig>,
     /// Deadline in milliseconds covering DNS resolution and the HTTP exchange.
     #[serde(default = "default_judge_timeout_ms")]
     pub(crate) timeout_ms: u64,
@@ -176,6 +200,16 @@ fn default_true() -> bool {
     true
 }
 
+/// Serde default for [`JudgeAuthConfig::header`]: `authorization`.
+fn default_auth_header() -> String {
+    "authorization".to_owned()
+}
+
+/// Serde default for [`JudgeAuthConfig::scheme`]: `Bearer`.
+fn default_auth_scheme() -> String {
+    "Bearer".to_owned()
+}
+
 /// Serde default for [`JudgeConfig::timeout_ms`]: 2 seconds.
 fn default_judge_timeout_ms() -> u64 {
     2_000
@@ -248,6 +282,26 @@ fn validate_judge(judge: &JudgeConfig) -> Result<(), FilterError> {
     }
     if judge.max_response_bytes == 0 {
         return Err(config_error("judge.max_response_bytes must be at least 1"));
+    }
+    if let Some(auth) = judge.auth.as_ref() {
+        validate_auth(auth)?;
+    }
+    Ok(())
+}
+
+/// Validates the judge authentication block.
+///
+/// # Errors
+///
+/// Returns a [`FilterError`] when the env var name is empty or the header name
+/// is not a valid HTTP header. The credential value is resolved (and its
+/// presence checked) later, at filter construction time.
+fn validate_auth(auth: &JudgeAuthConfig) -> Result<(), FilterError> {
+    if auth.value_env.trim().is_empty() {
+        return Err(config_error("judge.auth.value_env must not be empty"));
+    }
+    if http::header::HeaderName::from_bytes(auth.header.as_bytes()).is_err() {
+        return Err(config_error("judge.auth.header is not a valid header name"));
     }
     Ok(())
 }
@@ -454,6 +508,43 @@ targets:
         let yaml = format!("{MINIMAL}\nsession_floor:\n  ttl_secs: 0\n");
         let message = parse_err(&yaml);
         assert!(message.contains("ttl_secs"), "zero TTL must be rejected: {message}");
+    }
+
+    /// A valid config whose judge carries an auth block; `{AUTH}` is the auth
+    /// body, indented under `judge:`.
+    fn with_auth(auth_body: &str) -> String {
+        format!(
+            "judge:\n  endpoint: https://api.openai.com/v1/chat/completions\n  model: gpt-4o-mini\n  auth:\n{auth_body}targets:\n  weak: {{ cluster: a, model: b }}\n  strong: {{ cluster: c, model: d }}\n"
+        )
+    }
+
+    #[test]
+    fn judge_auth_round_trips_with_defaults() {
+        let config = parse(&with_auth("    value_env: OPENAI_API_KEY\n"));
+        let auth = config.judge.auth.expect("auth block parsed");
+        assert_eq!(auth.value_env, "OPENAI_API_KEY", "env var name parsed");
+        assert_eq!(auth.header, "authorization", "header defaults to authorization");
+        assert_eq!(auth.scheme, "Bearer", "scheme defaults to Bearer");
+    }
+
+    #[test]
+    fn empty_auth_env_is_rejected() {
+        let message = parse_err(&with_auth("    value_env: \"\"\n"));
+        assert!(
+            message.contains("value_env"),
+            "empty credential env var must be rejected: {message}"
+        );
+    }
+
+    #[test]
+    fn invalid_auth_header_is_rejected() {
+        let message = parse_err(&with_auth(
+            "    value_env: OPENAI_API_KEY\n    header: \"bad header\"\n",
+        ));
+        assert!(
+            message.contains("auth.header"),
+            "invalid auth header name must be rejected: {message}"
+        );
     }
 
     #[test]

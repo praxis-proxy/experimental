@@ -14,7 +14,11 @@ use pingora_core::upstreams::peer::HttpPeer;
 use praxis_core::subrequest::{SubRequest, SubRequestClient, SubRequestError, SubResponse};
 use praxis_filter::FilterError;
 
-use super::{config::JudgeConfig, error::RouteError, judge::JudgeTransport};
+use super::{
+    config::{JudgeAuthConfig, JudgeConfig},
+    error::RouteError,
+    judge::JudgeTransport,
+};
 
 /// A judge endpoint parsed once at configuration time.
 #[derive(Debug, Clone)]
@@ -31,16 +35,27 @@ pub(crate) struct JudgeEndpoint {
     authority: http::HeaderValue,
     /// Path and query sent to the judge.
     uri: http::Uri,
+    /// Resolved `(header, value)` credential; `None` for a keyless judge.
+    auth: Option<(http::HeaderName, http::HeaderValue)>,
 }
 
 impl JudgeEndpoint {
-    /// Parses an absolute http(s) URL into its connection components.
+    /// Parses the judge URL and resolves its optional credential from the
+    /// environment, so both are ready before the first request.
     ///
     /// # Errors
     ///
     /// Returns a [`FilterError`] when the URL is relative, uses a scheme other
-    /// than http/https, or carries a malformed authority or path.
-    pub(crate) fn parse(endpoint: &str) -> Result<Self, FilterError> {
+    /// than http/https, carries a malformed authority or path, or when the
+    /// configured credential environment variable is unset or malformed.
+    pub(crate) fn from_config(judge: &JudgeConfig) -> Result<Self, FilterError> {
+        let mut endpoint = Self::parse_url(&judge.endpoint)?;
+        endpoint.auth = judge.auth.as_ref().map(resolve_auth).transpose()?;
+        Ok(endpoint)
+    }
+
+    /// Parses an absolute http(s) URL into its connection components.
+    fn parse_url(endpoint: &str) -> Result<Self, FilterError> {
         let parsed: http::Uri = endpoint
             .parse()
             .map_err(|err| endpoint_error(&format!("not a valid URL: {err}")))?;
@@ -67,8 +82,48 @@ impl JudgeEndpoint {
             sni,
             authority,
             uri,
+            auth: None,
         })
     }
+}
+
+/// Resolves a credential from the environment into a ready `(header, value)`.
+///
+/// # Errors
+///
+/// Returns a [`FilterError`] when the environment variable is unset or empty,
+/// the header name is invalid, or the assembled value is not a legal header
+/// value (which would leak nothing, since the message never echoes the secret).
+fn resolve_auth(auth: &JudgeAuthConfig) -> Result<(http::HeaderName, http::HeaderValue), FilterError> {
+    let secret = std::env::var(&auth.value_env)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| auth_error(&format!("credential env var '{}' is unset or empty", auth.value_env)))?;
+    assemble_auth(auth, &secret)
+}
+
+/// Assembles a `(header, value)` credential from an already-resolved secret.
+///
+/// Split from the environment lookup so the header/scheme assembly is testable
+/// without mutating process-global state (workspace lints forbid `unsafe`, and
+/// `std::env::set_var` is `unsafe`).
+///
+/// # Errors
+///
+/// Returns a [`FilterError`] when the header name is invalid or the assembled
+/// value is not a legal header value; the message never echoes the secret.
+fn assemble_auth(auth: &JudgeAuthConfig, secret: &str) -> Result<(http::HeaderName, http::HeaderValue), FilterError> {
+    let header = http::HeaderName::from_bytes(auth.header.as_bytes())
+        .map_err(|err| auth_error(&format!("invalid header name: {err}")))?;
+    let rendered = if auth.scheme.is_empty() {
+        secret.to_owned()
+    } else {
+        format!("{} {secret}", auth.scheme)
+    };
+    let mut value = http::HeaderValue::from_str(&rendered)
+        .map_err(|_err| auth_error("resolved credential is not a valid header value"))?;
+    value.set_sensitive(true);
+    Ok((header, value))
 }
 
 /// Maps the URL scheme to a TLS decision.
@@ -84,6 +139,11 @@ fn parse_tls(parsed: &http::Uri) -> Result<bool, FilterError> {
 /// Builds an endpoint-shaped [`FilterError`].
 fn endpoint_error(message: &str) -> FilterError {
     format!("switchyard_route: judge.endpoint {message}").into()
+}
+
+/// Builds an auth-shaped [`FilterError`]; never echoes the credential value.
+fn auth_error(message: &str) -> FilterError {
+    format!("switchyard_route: judge.auth {message}").into()
 }
 
 /// The production [`JudgeTransport`]: resolves the parsed endpoint and
@@ -119,6 +179,9 @@ impl<'req> SubRequestJudge<'req> {
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_static("application/json"),
         );
+        if let Some((name, value)) = self.endpoint.auth.as_ref() {
+            headers.insert(name.clone(), value.clone());
+        }
         SubRequest {
             method: http::Method::POST,
             uri: self.endpoint.uri.clone(),
@@ -201,20 +264,32 @@ fn check_status(response: SubResponse) -> Result<Bytes, RouteError> {
     reason = "unwrap/panic are acceptable in tests"
 )]
 mod tests {
-    use super::JudgeEndpoint;
+    use super::{JudgeEndpoint, assemble_auth, resolve_auth};
+    use crate::switchyard::config::JudgeAuthConfig;
+
+    /// An auth config with the given header and scheme (env var name unused by
+    /// the pure-assembly tests).
+    fn auth(header: &str, scheme: &str) -> JudgeAuthConfig {
+        JudgeAuthConfig {
+            value_env: "UNUSED".to_owned(),
+            header: header.to_owned(),
+            scheme: scheme.to_owned(),
+        }
+    }
 
     #[test]
     fn https_endpoints_parse_with_tls_and_default_port() {
-        let endpoint = JudgeEndpoint::parse("https://judge.internal/v1/chat/completions").unwrap();
+        let endpoint = JudgeEndpoint::parse_url("https://judge.internal/v1/chat/completions").unwrap();
         assert!(endpoint.tls, "https enables TLS");
         assert_eq!(endpoint.port, 443, "https defaults to 443");
         assert_eq!(endpoint.sni, "judge.internal", "SNI mirrors the host");
         assert_eq!(endpoint.uri.path(), "/v1/chat/completions", "path preserved");
+        assert!(endpoint.auth.is_none(), "URL parse leaves auth unresolved");
     }
 
     #[test]
     fn http_endpoints_parse_with_explicit_port() {
-        let endpoint = JudgeEndpoint::parse("http://127.0.0.1:8000/v1/chat/completions?tag=x").unwrap();
+        let endpoint = JudgeEndpoint::parse_url("http://127.0.0.1:8000/v1/chat/completions?tag=x").unwrap();
         assert!(!endpoint.tls, "http stays cleartext");
         assert_eq!(endpoint.port, 8_000, "explicit port preserved");
         assert!(endpoint.sni.is_empty(), "no SNI for cleartext");
@@ -225,13 +300,45 @@ mod tests {
     #[test]
     fn bad_endpoints_are_rejected() {
         assert!(
-            JudgeEndpoint::parse("ftp://judge/v1").is_err(),
+            JudgeEndpoint::parse_url("ftp://judge/v1").is_err(),
             "non-http scheme rejected"
         );
         assert!(
-            JudgeEndpoint::parse("/v1/chat/completions").is_err(),
+            JudgeEndpoint::parse_url("/v1/chat/completions").is_err(),
             "relative URL rejected"
         );
-        assert!(JudgeEndpoint::parse("http://").is_err(), "missing host rejected");
+        assert!(JudgeEndpoint::parse_url("http://").is_err(), "missing host rejected");
+    }
+
+    #[test]
+    fn bearer_credential_prefixes_the_value_and_is_sensitive() {
+        let (name, value) = assemble_auth(&auth("authorization", "Bearer"), "sk-secret").unwrap();
+        assert_eq!(name.as_str(), "authorization", "header name honoured");
+        assert_eq!(value.to_str().unwrap(), "Bearer sk-secret", "scheme prefixes the value");
+        assert!(value.is_sensitive(), "credential is marked sensitive");
+    }
+
+    #[test]
+    fn an_empty_scheme_sends_the_raw_credential() {
+        let (name, value) = assemble_auth(&auth("x-api-key", ""), "raw-token").unwrap();
+        assert_eq!(name.as_str(), "x-api-key", "custom header honoured");
+        assert_eq!(value.to_str().unwrap(), "raw-token", "no prefix with an empty scheme");
+    }
+
+    #[test]
+    fn an_unset_credential_is_rejected() {
+        // A name unlikely to exist in any environment this test runs in.
+        let mut missing = auth("authorization", "Bearer");
+        missing.value_env = "SWITCHYARD_TEST_JUDGE_KEY_DEFINITELY_ABSENT_9f3c".to_owned();
+        let error = resolve_auth(&missing).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("unset or empty"),
+            "a missing secret must fail fast: {message}"
+        );
+        assert!(
+            message.contains("judge.auth"),
+            "auth failures name the judge.auth key, not judge.endpoint: {message}"
+        );
     }
 }

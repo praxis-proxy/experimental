@@ -39,6 +39,13 @@
 //!   model: qwen3-judge
 //!   timeout_ms: 2000
 //!   max_response_bytes: 65536
+//!   # Optional credential for a hosted judge. The secret lives only in the
+//!   # environment; config names the variable holding it. Omit for a keyless
+//!   # (e.g. local vLLM/Ollama) judge.
+//!   auth:
+//!     value_env: OPENAI_API_KEY   # env var holding the token
+//!     header: authorization       # default: authorization
+//!     scheme: Bearer              # default: Bearer ("" sends the raw value)
 //! threshold: 0.5
 //! targets:
 //!   weak:
@@ -132,7 +139,7 @@ impl SwitchyardRouteFilter {
     pub(crate) fn from_config(config: &serde_yaml::Value) -> Result<Box<dyn HttpFilter>, FilterError> {
         let parsed = config::parse_config(config)?;
         let algorithm = algorithm::build_algorithm(&parsed)?;
-        let judge_endpoint = JudgeEndpoint::parse(&parsed.judge.endpoint)?;
+        let judge_endpoint = JudgeEndpoint::from_config(&parsed.judge)?;
         let floor = parsed
             .session_floor
             .enabled

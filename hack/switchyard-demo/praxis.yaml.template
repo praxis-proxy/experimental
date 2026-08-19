@@ -26,6 +26,11 @@ filter_chains:
         judge:
           endpoint: "__JUDGE_ENDPOINT__"
           model: __JUDGE_MODEL__
+          # Credential for a hosted judge. The secret stays in the environment;
+          # only the variable *name* is written here. run-demo.sh drops this
+          # block entirely when JUDGE_KEY_ENV is unset (keyless local judges
+          # like vLLM/Ollama).
+__JUDGE_AUTH_BLOCK__
           # Generous: real local judges (especially thinking models) can be
           # slow; production judges should be small and fast (~2000 ms).
           timeout_ms: 60000
