@@ -34,8 +34,13 @@ const holdRemaining = async page => {
 const outputDir = process.env.OUTPUT_DIR || path.join(exampleDir, 'output', 'raw');
 const { browser, context, page } = await openRecordingBrowser({ videoDir: outputDir });
 try {
+  // proof-agenda.html is a self-advancing 3-section deck (title/cards ->
+  // architecture -> animated topology preview) timed to narration.srt's
+  // first 7 cues; 48337ms is that segment's measured duration (see
+  // RECORDING.md's "Intro deck" section) plus no extra padding, since the
+  // deck's own last caption already holds through its final frame.
   await page.goto(`file://${path.join(exampleDir, 'slides', 'proof-agenda.html')}`, { waitUntil: 'load' });
-  await page.waitForTimeout(12000);
+  await page.waitForTimeout(48337);
 
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#run-scenario');
@@ -58,7 +63,7 @@ try {
   const [appAOnA, appAOnB, appCOnA, appBOnA, appBOnB, appARecovered, appBRecovered] = results;
   requireGate(appAOnA.status === 200, 'app-a (gold-tier, sliding_window) admitted on gateway A', appAOnA);
   requireGate(
-    appAOnB.status === 429 && appAOnB.remaining === '0',
+    appAOnB.status === 429 && appAOnB.rate_limit?.remaining_tokens === '0',
     'app-a denied on gateway B via shared Valkey budget (sliding_window)',
     appAOnB,
   );
@@ -69,7 +74,7 @@ try {
   );
   requireGate(appBOnA.status === 200, 'app-b (silver-tier, token_bucket) admitted on gateway A', appBOnA);
   requireGate(
-    appBOnB.status === 429 && appBOnB.remaining === '0',
+    appBOnB.status === 429 && appBOnB.rate_limit?.remaining_tokens === '0',
     'app-b denied on gateway B via shared Valkey budget (token_bucket, not just sliding_window)',
     appBOnB,
   );

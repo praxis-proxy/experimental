@@ -1,44 +1,72 @@
 1
-00:00:00,000 --> 00:00:11,201
-This demo proves per app token budgets are enforced consistently across gateway replicas, for two independently chosen rate limiting algorithms, and that each recovers on its own.
+00:00:00,000 --> 00:00:03,122
+Before the live proof, here's what's under the hood.
 
 2
-00:00:11,201 --> 00:00:15,332
-Two independent Praxis AI gateways share one Valkey backed ledger.
+00:00:03,122 --> 00:00:11,289
+Two independent Praxis AI gateways sit in front of three applications: app-a, app-b, and app-c, each governed by a per-app token budget.
 
 3
-00:00:15,332 --> 00:00:23,216
-App-a and app-c are matched to the gold tier rule, a sliding window; app-b is matched to the silver tier rule, a token bucket.
+00:00:11,289 --> 00:00:13,330
+Every request carries two headers.
 
 4
-00:00:23,216 --> 00:00:26,596
-App-a's first request, through Gateway A, is admitted.
+00:00:13,330 --> 00:00:18,914
+X-tier selects one of two rules: gold-tier, a sliding window, or silver-tier, a token bucket.
 
 5
-00:00:26,596 --> 00:00:33,667
-Its next request, through Gateway B, a separate process, is denied: both gateways consult the same shared ledger.
+00:00:18,914 --> 00:00:23,358
+X-app-id then selects that app's own budget within whichever rule matched.
 
 6
-00:00:33,667 --> 00:00:38,673
-App-c, on the same sliding window rule, is admitted on its own untouched budget.
+00:00:23,358 --> 00:00:33,625
+Both rules reserve tokens against the same shared Valkey ledger, so the budget is shared across every gateway replica, not local to whichever instance handled the request.
 
 7
-00:00:38,673 --> 00:00:50,375
-Now app-b, on the token bucket rule, is admitted through Gateway A, and likewise denied through Gateway B: the shared ledger guarantee holds for token bucket too, not just sliding window.
+00:00:33,625 --> 00:00:48,337
+Watch a few example requests move through this path: matched to a rule, reserved against the shared ledger, and only then forwarded to the backend, or stopped cold, before ever reaching a backend, if the ledger says that budget is already spent.
 
 8
-00:00:50,375 --> 00:00:53,316
-Now watch each budget recover on its own terms.
+00:00:48,337 --> 00:00:59,538
+This demo proves per app token budgets are enforced consistently across gateway replicas, for two independently chosen rate limiting algorithms, and that each recovers on its own.
 
 9
-00:00:53,316 --> 00:01:00,325
-App-a's window slides forward, its earlier reservation ages out, and it is admitted again, with no manual reset.
+00:00:59,538 --> 00:01:03,669
+Two independent Praxis AI gateways share one Valkey backed ledger.
 
 10
-00:01:00,325 --> 00:01:09,211
-App-b's bucket, meanwhile, refills continuously, token by token, and is also admitted again, typically sooner than a fixed window would allow.
+00:01:03,669 --> 00:01:11,553
+App-a and app-c are matched to the gold tier rule, a sliding window; app-b is matched to the silver tier rule, a token bucket.
 
 11
-00:01:09,211 --> 00:01:17,472
+00:01:11,553 --> 00:01:14,933
+App-a's first request, through Gateway A, is admitted.
+
+12
+00:01:14,933 --> 00:01:22,004
+Its next request, through Gateway B, a separate process, is denied: both gateways consult the same shared ledger.
+
+13
+00:01:22,004 --> 00:01:27,010
+App-c, on the same sliding window rule, is admitted on its own untouched budget.
+
+14
+00:01:27,010 --> 00:01:38,712
+Now app-b, on the token bucket rule, is admitted through Gateway A, and likewise denied through Gateway B: the shared ledger guarantee holds for token bucket too, not just sliding window.
+
+15
+00:01:38,712 --> 00:01:41,653
+Now watch each budget recover on its own terms.
+
+16
+00:01:41,653 --> 00:01:48,662
+App-a's window slides forward, its earlier reservation ages out, and it is admitted again, with no manual reset.
+
+17
+00:01:48,662 --> 00:01:57,548
+App-b's bucket, meanwhile, refills continuously, token by token, and is also admitted again, typically sooner than a fixed window would allow.
+
+18
+00:01:57,548 --> 00:02:05,809
 One shared ledger, two algorithms chosen per rule, isolated per app budgets, and automatic recovery, across a real process boundary.
 
