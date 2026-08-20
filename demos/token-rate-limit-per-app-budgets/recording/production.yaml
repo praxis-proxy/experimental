@@ -16,8 +16,7 @@ evidence:
       window_recovery,
       token_bucket_recovery,
     ]
-redaction:
-  deny:
-    - odin
-    - thor
-    - loki
+# No redaction.deny list: app-a/app-b/app-c (and every other identifier in
+# this scenario) are already fully generic placeholders, not stand-ins for
+# real customer/internal names, so there's nothing here that needs scrubbing
+# from narration/output.

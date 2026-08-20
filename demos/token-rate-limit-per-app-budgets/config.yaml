@@ -18,16 +18,24 @@
 # algorithm's own recovery mechanics, short enough to watch happen
 # within a single curl walkthrough or recording.
 #
-# silver-tier's capacity/estimate_tokens are deliberately set equal to the
-# stub backend's fixed usage.total_tokens (10, see docker-compose.yml's
-# `backend` service) -- NOT bumped up to match gold-tier's 40. This isn't
-# cosmetic: token_bucket's reconciliation credits any estimate/actual gap
-# straight back into the bucket (it's a continuously-refilling resource),
-# so a larger estimate here would let the very next request through on a
-# refund well before any real capacity had been exhausted -- see
-# recording/RECORDING.md's "two algorithms reconcile differently" section
-# for how this was found and why sliding_window's ledger doesn't have the
-# same problem at capacity: 40.
+# estimate_tokens is deliberately LOWER than each rule's capacity for both
+# tiers (15/40 gold, 7/10 silver) so a single request never exhausts a
+# budget outright -- multiple real, independently admitted requests are
+# visible before the eventual denial, instead of a one-shot cliff-edge.
+# Both values MUST exactly match what the backend's `usage.total_tokens`
+# reports for that tier (see k8s/02-backend.yaml / docker-compose.yml's
+# `backend` service, which reads the `x-tier` header for this reason) --
+# NOT a smaller "optimistic" estimate. This isn't cosmetic: reconciliation
+# debits `actual - estimate` as an *extra* charge beyond the estimate
+# already reserved whenever actual > estimate, symmetrically for both
+# algorithms (verified against the source branch's `Ledger::reconcile` /
+# `TokenBucketLedger::reconcile` and their unit tests -- see
+# recording/RECORDING.md's "Correction" section, which supersedes an
+# earlier, incorrect claim that the two algorithms reconciled
+# differently), so an estimate lower than the real backend usage would
+# silently over-drain either budget past what the naive "estimate only"
+# arithmetic below assumes. Keeping estimate and actual matched for both
+# tiers avoids depending on that reconciliation math at all.
 
 listeners:
   - name: default
@@ -52,7 +60,7 @@ filter_chains:
             algorithm: sliding_window
             window: 10s                   # sliding window duration, per app
             capacity: 40                  # each app's budget within the window, in tokens
-            estimate_tokens: 40           # cost reserved per request at admission
+            estimate_tokens: 15           # cost reserved per request -- 2 requests admit (30/40), a 3rd is denied
             bucket_key_header: x-app-id   # one independent budget per app, within this rule
             backend:
               kind: valkey                # shared across every gateway instance/replica
@@ -63,9 +71,9 @@ filter_chains:
               headers:
                 x-tier: silver
             algorithm: token_bucket
-            capacity: 10                  # each app's bucket ceiling, in tokens -- == the stub backend's real usage, see the note above
+            capacity: 10                  # each app's bucket ceiling, in tokens
             refill_rate: 2                # tokens refilled per second, up to `capacity`
-            estimate_tokens: 10           # cost reserved per request at admission -- == capacity, see the note above
+            estimate_tokens: 7            # cost reserved per request -- 1 request admits (3 left), a back-to-back 2nd is denied; a 2s wait refills 4 (3+4=7) so a retry then admits
             bucket_key_header: x-app-id   # one independent budget per app, within this rule
             backend:
               kind: valkey                # shared across every gateway instance/replica

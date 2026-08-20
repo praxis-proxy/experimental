@@ -45,6 +45,26 @@ data:
         except Exception as exc:
             return f"lookup-failed:{exc.__class__.__name__}"
 
+    def list_namespace_pods():
+        try:
+            with k8s_request(f"/api/v1/namespaces/{NAMESPACE}/pods") as resp:
+                data = json.loads(resp.read())
+            pods = []
+            for item in data.get("items", []):
+                labels = item.get("metadata", {}).get("labels", {})
+                statuses = item.get("status", {}).get("containerStatuses", [{}])
+                ready = bool(statuses) and all(s.get("ready") for s in statuses)
+                pods.append({
+                    "role": labels.get("app", "?"),
+                    "pod_name": item["metadata"]["name"],
+                    "phase": item.get("status", {}).get("phase", "Unknown"),
+                    "ready": ready,
+                })
+            pods.sort(key=lambda p: p["role"])
+            return pods
+        except Exception as exc:
+            return [{"role": "?", "pod_name": f"lookup-failed:{exc.__class__.__name__}", "phase": "Unknown", "ready": False}]
+
     class Handler(BaseHTTPRequestHandler):
         def _cors(self):
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -76,6 +96,14 @@ data:
             if parsed.path == "/gateway-pod":
                 gw = urllib.parse.parse_qs(parsed.query).get("gw", ["a"])[0]
                 self._json({"gateway": gw, "gateway_pod": resolve_gateway_pod_name(f"gateway-{gw}")})
+                return
+            if parsed.path == "/cluster-pods":
+                # Live "kubectl get pods -n trl-demo" equivalent, so the
+                # dashboard can show the whole real deployment topology (not
+                # just the one pod each card already links to) -- the
+                # single strongest "this isn't a mock" signal available,
+                # since it's the entire namespace's actual live state.
+                self._json({"namespace": NAMESPACE, "pods": list_namespace_pods()})
                 return
             if parsed.path == "/gw-logs":
                 gw = urllib.parse.parse_qs(parsed.query).get("gw", ["a"])[0]

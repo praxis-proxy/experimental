@@ -113,11 +113,34 @@
     display: flex; align-items: center; justify-content: center; font-size: 12px; margin-top: 1px;
   }
   #checklist .item.done .box { background: #69e0a4; border-color: #69e0a4; color: #08131f; }
+
+  #cluster-strip {
+    display: flex; align-items: center; gap: 10px;
+    background: #0d1d30; border: 2px solid #2d4a68; border-radius: 12px;
+    padding: 7px 16px; margin-bottom: 12px;
+  }
+  #cluster-strip .ns-label { font-size: 13px; font-weight: 700; color: #67e8f9; flex-shrink: 0; }
+  #cluster-strip .ns-label code { font-weight: 700; }
+  #pod-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
+  .pod-chip {
+    display: flex; align-items: center; gap: 6px; background: #16324f; border: 1px solid #2d4a68;
+    border-radius: 8px; padding: 3px 10px; font-size: 12px; white-space: nowrap;
+  }
+  .pod-chip .role { color: #9db3c8; font-weight: 600; }
+  .pod-chip .name { font-family: ui-monospace, SFMono-Regular, monospace; color: #eef7ff; }
+  .pod-chip .dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7f92; flex-shrink: 0; }
+  .pod-chip .dot.running { background: #69e0a4; box-shadow: 0 0 5px #69e0a4; }
+  .pod-chip .dot.notready { background: #f0b354; }
 </style>
 </head>
 <body>
   <h1>Per-app token budgets — mixed algorithms, shared across gateway replicas</h1>
   <p class="subtitle">Two <code>token_rate_limit</code> rules matched by <code>x-tier</code>, each keyed by <code>x-app-id</code>: <strong>gold-tier</strong> (sliding_window) for app-a/app-c, <strong>silver-tier</strong> (token_bucket) for app-b — both backed by the same shared Valkey namespace.</p>
+
+  <div id="cluster-strip">
+    <span class="ns-label">Namespace: <code>trl-demo</code></span>
+    <span id="pod-chips">Live pods: resolving via Kubernetes API&hellip;</span>
+  </div>
 
   <div class="legend">
     <div class="card gold">
@@ -278,7 +301,7 @@
     'app-c': new BudgetModel('sliding_window', 40, { windowMs: 10000 }),
     'app-b': new BudgetModel('token_bucket', 10, { refillRate: 2 }),
   };
-  const ESTIMATE = { 'app-a': 40, 'app-c': 40, 'app-b': 10 };
+  const ESTIMATE = { 'app-a': 15, 'app-c': 15, 'app-b': 7 };
   const COLOR = { 'app-a': '#f0b354', 'app-c': '#e08fe0', 'app-b': '#7ec8f5' };
 
   function drawSpark(app) {
@@ -445,55 +468,69 @@
     stepLabel('Two independent gateways share one Valkey-backed ledger. app-a/app-c match gold-tier (sliding_window); app-b matches silver-tier (token_bucket).');
     checkOff('algo');
 
-    await at(9700, async () => {
-      stepLabel('Step 1: app-a (gold-tier, sliding_window) sends its first request via Gateway A (expect 200 — budget admitted)');
+    // Offsets scaled by the narration's Ava-vs-Samantha duration ratio
+    // (~1.1085x) from the original cue-aligned offsets -- see
+    // RECORDING.md's "Intro deck" section for the source measurement.
+    await at(23221, async () => {
+      stepLabel('Step 1: app-a (gold-tier, sliding_window) sends its first request via Gateway A (expect 200 — 15/40 tokens reserved, 25 remaining)');
       window.__scenarioResults.push(await sendRequest('a', 'app-a'));
     });
 
-    await at(13100, async () => {
-      stepLabel('Step 2: app-a sends its next request via Gateway B, the OTHER process (expect 429 — shared Valkey budget already exhausted)');
+    await at(23775, async () => {
+      stepLabel('Step 2: app-a sends its next request via Gateway B, the OTHER process (expect 200 — same shared ledger keeps accumulating: 30/40 reserved, 10 remaining)');
       window.__scenarioResults.push(await sendRequest('b', 'app-a'));
       checkOff('shared');
     });
 
-    await at(20200, async () => {
-      stepLabel('Step 3: app-c (gold-tier, sliding_window) sends a request via Gateway A (expect 200 — its own independent budget, unaffected by app-a)');
+    // Fired as a genuine rapid burst with step 1/2 (all 3 within ~1s), not
+    // spread across narration pacing -- gold-tier's window is only 10s, so
+    // spacing this out toward cue13's later narration timestamp would let
+    // step 1's reservation age back out of the window before this fires,
+    // silently flipping the expected 429 into a 200 (found via live E2E
+    // verification, not assumed).
+    await at(24329, async () => {
+      stepLabel('Step 3: app-a sends a third request, back on Gateway A (expect 429 — gold-tier now exhausted: needs 15, only 10 remain, on either gateway)');
+      window.__scenarioResults.push(await sendRequest('a', 'app-a'));
+    });
+
+    await at(43676, async () => {
+      stepLabel('Step 4: app-c (gold-tier, sliding_window) sends a request via Gateway A (expect 200 — its own independent budget, unaffected by app-a)');
       window.__scenarioResults.push(await sendRequest('a', 'app-c'));
       checkOff('isolation');
       checkOff('reservation');
     });
 
-    await at(25200, async () => {
-      stepLabel('Step 4: app-b (silver-tier, token_bucket) sends its first request via Gateway A (expect 200 — a different algorithm, matched via x-tier: silver)');
+    await at(49042, async () => {
+      stepLabel('Step 5: app-b (silver-tier, token_bucket) sends its first request via Gateway A (expect 200 — 7/10 tokens reserved, 3 remaining)');
       window.__scenarioResults.push(await sendRequest('a', 'app-b'));
     });
 
-    await at(27200, async () => {
-      stepLabel('Step 5: app-b sends its next request via Gateway B, the OTHER process (expect 429 — the shared-Valkey guarantee holds for token_bucket too)');
+    await at(49597, async () => {
+      stepLabel('Step 6: app-b sends its next request via Gateway B immediately after (expect 429 — a single burst already leaves too little for a second call)');
       window.__scenarioResults.push(await sendRequest('b', 'app-b'));
     });
 
-    await at(36900, async () => {
-      stepLabel('Now watch each budget recover on its own terms — gold-tier stays flat until the window slides; silver-tier ramps up continuously as it refills.');
-    });
-
-    await at(44500, async () => {
-      stepLabel('Step 6: app-a retries on Gateway A (expect 200 — the window slid past its earlier reservation; nothing was manually reset)');
-      window.__scenarioResults.push(await sendRequest('a', 'app-a'));
-      checkOff('window-recovery');
-    });
-
-    await at(51500, async () => {
-      stepLabel("Step 7: app-b retries on Gateway B (expect 200 — silver-tier's bucket refilled continuously, recovering well before gold-tier's cliff-edge window slide)");
+    await at(63770, async () => {
+      stepLabel('Step 7: app-b retries on Gateway B (expect 200 — silver-tier has refilled enough by now; just 2 seconds would already be enough: 3 + 4 = 7)');
       window.__scenarioResults.push(await sendRequest('b', 'app-b'));
       checkOff('bucket-recovery');
     });
 
-    await at(55700, async () => {
-      stepLabel('One shared ledger, two algorithms chosen per rule, isolated per-app budgets, and automatic recovery — across a real process boundary.');
+    await at(68694, async () => {
+      stepLabel("app-a's gold-tier takes longer to recover: its sliding window has to age its earlier reservations out of the full 10s window first.");
     });
 
-    await at(74000, async () => {});
+    await at(77328, async () => {
+      stepLabel('Step 8: app-a retries on Gateway A (expect 200 — the window slid past its earlier reservations; nothing was manually reset)');
+      window.__scenarioResults.push(await sendRequest('a', 'app-a'));
+      checkOff('window-recovery');
+    });
+
+    await at(77882, async () => {
+      stepLabel('Same shared ledger, same reservation guarantee for both algorithms — but very different recovery speeds, and no manual reset for either one.');
+    });
+
+    await at(87205, async () => {});
 
     stepLabel('Scenario complete.');
     window.__scenarioDone = true;
@@ -560,8 +597,32 @@
     };
   }
 
+  // Live "kubectl get pods -n trl-demo" equivalent -- every pod that makes
+  // up this deployment, fetched from the real Kubernetes API (not a fixed
+  // list), polled continuously so restarts/rescheduling are reflected.
+  async function refreshClusterPods() {
+    try {
+      const res = await fetch('/apps/app-a/cluster-pods');
+      const data = await res.json();
+      const el = document.getElementById('pod-chips');
+      el.innerHTML = data.pods
+        .map(p => {
+          const dotClass = !p.ready ? 'notready' : p.phase === 'Running' ? 'running' : '';
+          return (
+            `<span class="pod-chip"><span class="dot ${dotClass}"></span>` +
+            `<span class="role">${p.role}</span><span class="name">${p.pod_name}</span></span>`
+          );
+        })
+        .join('');
+    } catch {
+      document.getElementById('pod-chips').textContent = 'Live pods: lookup failed';
+    }
+  }
+
   document.getElementById('run-scenario').addEventListener('click', runScenario);
   startAnimating();
+  refreshClusterPods();
+  setInterval(refreshClusterPods, 5000);
   // ipToApp (populated by loadIdentities) must be ready *before* the gateway
   // log streams open, or the earliest lines -- often the ones visible
   // longest in the panel -- render with raw pod IPs instead of app names.

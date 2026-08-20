@@ -1,72 +1,71 @@
 1
-00:00:00,000 --> 00:00:03,122
+00:00:00,000 --> 00:00:03,487
 Before the live proof, here's what's under the hood.
 
 2
-00:00:03,122 --> 00:00:11,289
+00:00:03,487 --> 00:00:12,609
 Two independent Praxis AI gateways sit in front of three applications: app-a, app-b, and app-c, each governed by a per-app token budget.
 
 3
-00:00:11,289 --> 00:00:13,330
+00:00:12,609 --> 00:00:14,889
 Every request carries two headers.
 
 4
-00:00:13,330 --> 00:00:18,914
+00:00:14,889 --> 00:00:21,127
 X-tier selects one of two rules: gold-tier, a sliding window, or silver-tier, a token bucket.
 
 5
-00:00:18,914 --> 00:00:23,358
+00:00:21,127 --> 00:00:26,090
 X-app-id then selects that app's own budget within whichever rule matched.
 
 6
-00:00:23,358 --> 00:00:33,625
+00:00:26,090 --> 00:00:37,559
 Both rules reserve tokens against the same shared Valkey ledger, so the budget is shared across every gateway replica, not local to whichever instance handled the request.
 
 7
-00:00:33,625 --> 00:00:48,337
+00:00:37,559 --> 00:00:53,991
 Watch a few example requests move through this path: matched to a rule, reserved against the shared ledger, and only then forwarded to the backend, or stopped cold, before ever reaching a backend, if the ledger says that budget is already spent.
 
 8
-00:00:48,337 --> 00:00:59,538
+00:00:53,991 --> 00:01:05,997
 This demo proves per app token budgets are enforced consistently across gateway replicas, for two independently chosen rate limiting algorithms, and that each recovers on its own.
 
 9
-00:00:59,538 --> 00:01:03,669
+00:01:05,997 --> 00:01:10,423
 Two independent Praxis AI gateways share one Valkey backed ledger.
 
 10
-00:01:03,669 --> 00:01:11,553
+00:01:10,423 --> 00:01:18,875
 App-a and app-c are matched to the gold tier rule, a sliding window; app-b is matched to the silver tier rule, a token bucket.
 
 11
-00:01:11,553 --> 00:01:14,933
+00:01:18,875 --> 00:01:22,496
 App-a's first request, through Gateway A, is admitted.
 
 12
-00:01:14,933 --> 00:01:22,004
-Its next request, through Gateway B, a separate process, is denied: both gateways consult the same shared ledger.
+00:01:22,496 --> 00:01:31,483
+Its next request, through Gateway B, a separate process, is also admitted: both gateways are drawing down the very same shared budget.
 
 13
-00:01:22,004 --> 00:01:27,010
-App-c, on the same sliding window rule, is admitted on its own untouched budget.
+00:01:31,483 --> 00:01:39,330
+A third request, back on Gateway A, is denied: gold-tier's budget is now exhausted, no matter which gateway is asked.
 
 14
-00:01:27,010 --> 00:01:38,712
-Now app-b, on the token bucket rule, is admitted through Gateway A, and likewise denied through Gateway B: the shared ledger guarantee holds for token bucket too, not just sliding window.
+00:01:39,330 --> 00:01:44,696
+App-c, on the same sliding window rule, is admitted on its own untouched budget.
 
 15
-00:01:38,712 --> 00:01:41,653
-Now watch each budget recover on its own terms.
+00:01:44,696 --> 00:01:56,098
+Now app-b, on the token bucket rule, is admitted through Gateway A, then immediately denied through Gateway B: a single burst already leaves too little for a second call.
 
 16
-00:01:41,653 --> 00:01:48,662
-App-a's window slides forward, its earlier reservation ages out, and it is admitted again, with no manual reset.
+00:01:56,098 --> 00:02:04,348
+Watch app-b recover first: its bucket refills continuously, and after only a couple of seconds it already has enough again.
 
 17
-00:01:48,662 --> 00:01:57,548
-App-b's bucket, meanwhile, refills continuously, token by token, and is also admitted again, typically sooner than a fixed window would allow.
+00:02:04,348 --> 00:02:13,536
+App-a takes longer: its sliding window has to wait for the earlier reservations to age out of the full window before it's admitted again.
 
 18
-00:01:57,548 --> 00:02:05,809
-One shared ledger, two algorithms chosen per rule, isolated per app budgets, and automatic recovery, across a real process boundary.
-
+00:02:13,536 --> 00:02:22,859
+Same shared ledger, same reservation guarantee for both algorithms, but very different recovery speeds, and no manual reset for either one.

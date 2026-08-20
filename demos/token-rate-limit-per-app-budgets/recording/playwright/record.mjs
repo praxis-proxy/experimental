@@ -36,19 +36,20 @@ const { browser, context, page } = await openRecordingBrowser({ videoDir: output
 try {
   // proof-agenda.html is a self-advancing 3-section deck (title/cards ->
   // architecture -> animated topology preview) timed to narration.srt's
-  // first 7 cues; 48337ms is that segment's measured duration (see
-  // RECORDING.md's "Intro deck" section) plus no extra padding, since the
-  // deck's own last caption already holds through its final frame.
+  // first 7 cues; 53991ms is that segment's measured duration with the
+  // Ava (Premium) narration voice (see RECORDING.md's "Intro deck"
+  // section) plus no extra padding, since the deck's own last caption
+  // already holds through its final frame.
   await page.goto(`file://${path.join(exampleDir, 'slides', 'proof-agenda.html')}`, { waitUntil: 'load' });
-  await page.waitForTimeout(48337);
+  await page.waitForTimeout(53991);
 
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#run-scenario');
   await page.waitForTimeout(1500);
   await page.click('#run-scenario');
 
-  // The re-paced scenario (see dashboard/index.html) now spreads its 7
-  // requests across ~74s to track narration.srt's cues instead of firing
+  // The re-paced scenario (see dashboard/index.html) now spreads its 8
+  // requests across ~79s to track narration.srt's cues instead of firing
   // them all in the first ~15s, so this deadline needs enough headroom
   // above that, not just above a single request's round-trip time.
   const deadline = Date.now() + 100000;
@@ -60,33 +61,51 @@ try {
   }
   if (!results) throw new Error('scenario did not complete within timeout');
 
-  const [appAOnA, appAOnB, appCOnA, appBOnA, appBOnB, appARecovered, appBRecovered] = results;
-  requireGate(appAOnA.status === 200, 'app-a (gold-tier, sliding_window) admitted on gateway A', appAOnA);
+  const [appAOnA, appAOnB, appAOnADenied, appCOnA, appBOnA, appBOnB, appBRecovered, appARecovered] = results;
   requireGate(
-    appAOnB.status === 429 && appAOnB.rate_limit?.remaining_tokens === '0',
-    'app-a denied on gateway B via shared Valkey budget (sliding_window)',
+    appAOnA.status === 200,
+    'app-a (gold-tier, sliding_window) admitted on gateway A -- 15/40 reserved, 25 remaining',
+    appAOnA,
+  );
+  requireGate(
+    appAOnB.status === 200,
+    'app-a admitted again on gateway B, the OTHER process -- the same shared Valkey budget keeps accumulating: 30/40 reserved, 10 remaining',
     appAOnB,
+  );
+  requireGate(
+    // X-RateLimit-Remaining-Tokens is a hardcoded "0" on every 429 regardless
+    // of algorithm or actual usage (an MVP shortcut, not computed from real
+    // remaining capacity -- see filters/src/token_rate_limit/mod.rs's
+    // HEADER_RATELIMIT_REMAINING_TOKENS doc comment), so this only proves
+    // "denied", not the specific 10-tokens-short-of-15 shortfall.
+    appAOnADenied.status === 429 && appAOnADenied.rate_limit?.remaining_tokens === '0',
+    'app-a denied on a third request, back on gateway A -- gold-tier now exhausted (needs 15, only 10 remain), proven consistent across both gateways',
+    appAOnADenied,
   );
   requireGate(
     appCOnA.status === 200,
     'app-c (gold-tier, sliding_window) admitted on gateway A on its own untouched budget',
     appCOnA,
   );
-  requireGate(appBOnA.status === 200, 'app-b (silver-tier, token_bucket) admitted on gateway A', appBOnA);
+  requireGate(
+    appBOnA.status === 200,
+    'app-b (silver-tier, token_bucket) admitted on gateway A -- 7/10 reserved, 3 remaining',
+    appBOnA,
+  );
   requireGate(
     appBOnB.status === 429 && appBOnB.rate_limit?.remaining_tokens === '0',
-    'app-b denied on gateway B via shared Valkey budget (token_bucket, not just sliding_window)',
+    'app-b denied on gateway B immediately after -- a single burst already leaves too little (3 remaining) for a second 7-token call',
     appBOnB,
   );
   requireGate(
-    appARecovered.status === 200,
-    'app-a admitted again on gateway A once the sliding window aged its earlier reservation out, with no manual reset',
-    appARecovered,
+    appBRecovered.status === 200,
+    "app-b admitted again on gateway B once silver-tier's token_bucket refilled continuously -- just 2 seconds (4 tokens) would already have been enough, with no manual reset",
+    appBRecovered,
   );
   requireGate(
-    appBRecovered.status === 200,
-    "app-b admitted again on gateway B once silver-tier's token_bucket refilled continuously, with no manual reset -- a different recovery mechanism than app-a's window slide",
-    appBRecovered,
+    appARecovered.status === 200,
+    'app-a admitted again on gateway A once the sliding window aged its earlier reservations out of the full 10s window -- a much longer wait than silver-tier needed, with no manual reset',
+    appARecovered,
   );
 
   await holdRemaining(page);
