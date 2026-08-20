@@ -13,10 +13,21 @@
 # "Current scope"). `x-app-id` still keys an independent budget per app
 # *within* whichever rule matched, per ai#129.
 #
-# `window: 10s` / `refill_rate: 8` are also deliberately short (a real
+# `window: 10s` / `refill_rate: 2` are also deliberately short (a real
 # deployment would use much larger values): long enough to observe each
 # algorithm's own recovery mechanics, short enough to watch happen
 # within a single curl walkthrough or recording.
+#
+# silver-tier's capacity/estimate_tokens are deliberately set equal to the
+# stub backend's fixed usage.total_tokens (10, see docker-compose.yml's
+# `backend` service) -- NOT bumped up to match gold-tier's 40. This isn't
+# cosmetic: token_bucket's reconciliation credits any estimate/actual gap
+# straight back into the bucket (it's a continuously-refilling resource),
+# so a larger estimate here would let the very next request through on a
+# refund well before any real capacity had been exhausted -- see
+# recording/RECORDING.md's "two algorithms reconcile differently" section
+# for how this was found and why sliding_window's ledger doesn't have the
+# same problem at capacity: 40.
 
 listeners:
   - name: default
@@ -52,9 +63,9 @@ filter_chains:
               headers:
                 x-tier: silver
             algorithm: token_bucket
-            capacity: 40                  # each app's bucket ceiling, in tokens
-            refill_rate: 8                # tokens refilled per second, up to `capacity`
-            estimate_tokens: 40           # cost reserved per request at admission
+            capacity: 10                  # each app's bucket ceiling, in tokens -- == the stub backend's real usage, see the note above
+            refill_rate: 2                # tokens refilled per second, up to `capacity`
+            estimate_tokens: 10           # cost reserved per request at admission -- == capacity, see the note above
             bucket_key_header: x-app-id   # one independent budget per app, within this rule
             backend:
               kind: valkey                # shared across every gateway instance/replica

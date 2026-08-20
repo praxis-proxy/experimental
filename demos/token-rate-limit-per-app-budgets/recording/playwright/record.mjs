@@ -31,7 +31,8 @@ const holdRemaining = async page => {
   if (remaining > 0) await page.waitForTimeout(remaining);
 };
 
-const { browser, context, page } = await openRecordingBrowser({ videoDir: process.env.OUTPUT_DIR || 'output/raw' });
+const outputDir = process.env.OUTPUT_DIR || path.join(exampleDir, 'output', 'raw');
+const { browser, context, page } = await openRecordingBrowser({ videoDir: outputDir });
 try {
   await page.goto(`file://${path.join(exampleDir, 'slides', 'proof-agenda.html')}`, { waitUntil: 'load' });
   await page.waitForTimeout(12000);
@@ -41,7 +42,11 @@ try {
   await page.waitForTimeout(1500);
   await page.click('#run-scenario');
 
-  const deadline = Date.now() + 30000;
+  // The re-paced scenario (see dashboard/index.html) now spreads its 7
+  // requests across ~74s to track narration.srt's cues instead of firing
+  // them all in the first ~15s, so this deadline needs enough headroom
+  // above that, not just above a single request's round-trip time.
+  const deadline = Date.now() + 100000;
   let results = null;
   while (Date.now() < deadline) {
     results = await page.evaluate(() => (window.__scenarioDone ? window.__scenarioResults : null));
@@ -50,19 +55,33 @@ try {
   }
   if (!results) throw new Error('scenario did not complete within timeout');
 
-  const [appAOnA, appAOnB, appBOnB, appCOnA, appARecovered] = results;
-  requireGate(appAOnA.status === 200, 'app-a admitted on gateway A', appAOnA);
+  const [appAOnA, appAOnB, appCOnA, appBOnA, appBOnB, appARecovered, appBRecovered] = results;
+  requireGate(appAOnA.status === 200, 'app-a (gold-tier, sliding_window) admitted on gateway A', appAOnA);
   requireGate(
     appAOnB.status === 429 && appAOnB.remaining === '0',
-    'app-a denied on gateway B via shared Valkey budget',
+    'app-a denied on gateway B via shared Valkey budget (sliding_window)',
     appAOnB,
   );
-  requireGate(appBOnB.status === 200, 'app-b admitted on gateway B, unaffected by app-a', appBOnB);
-  requireGate(appCOnA.status === 200, 'app-c admitted on gateway A on its own untouched budget', appCOnA);
+  requireGate(
+    appCOnA.status === 200,
+    'app-c (gold-tier, sliding_window) admitted on gateway A on its own untouched budget',
+    appCOnA,
+  );
+  requireGate(appBOnA.status === 200, 'app-b (silver-tier, token_bucket) admitted on gateway A', appBOnA);
+  requireGate(
+    appBOnB.status === 429 && appBOnB.remaining === '0',
+    'app-b denied on gateway B via shared Valkey budget (token_bucket, not just sliding_window)',
+    appBOnB,
+  );
   requireGate(
     appARecovered.status === 200,
-    "app-a admitted again on gateway A once the sliding window aged its earlier reservation out, with no manual reset",
+    'app-a admitted again on gateway A once the sliding window aged its earlier reservation out, with no manual reset',
     appARecovered,
+  );
+  requireGate(
+    appBRecovered.status === 200,
+    "app-b admitted again on gateway B once silver-tier's token_bucket refilled continuously, with no manual reset -- a different recovery mechanism than app-a's window slide",
+    appBRecovered,
   );
 
   await holdRemaining(page);

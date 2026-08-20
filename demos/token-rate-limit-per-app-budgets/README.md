@@ -118,15 +118,17 @@ questions from the routing-layer questions the other demo explores.
 
 ## Recorded walkthrough
 
-> [!NOTE]
-> `recording/output/sliding-window-based-token-rate-limit.mp4` covers the
-> **previous, single-algorithm** version of this demo (gold-tier/
-> sliding_window only, no `x-tier` matching). It has not yet been
-> re-recorded for the mixed-algorithm scenario below (`silver-tier`/
-> `token_bucket`, `x-tier` rule matching). `dashboard/` and `config.yaml`
-> already reflect the new scenario; the video and `recording/RECORDING.md`
-> are pending an update to match. Until then, treat the video as
-> demonstrating a subset of what this README and the live stack now do.
+`recording/output/mixed-algorithms-token-rate-limit.mp4` (1920x1080,
+h264/aac, ~79s) is a narrated recording of the mixed-algorithm scenario
+below, driven through `dashboard/` against a live two-gateway + Valkey
+stack. Requests are paced against the narration throughout the clip, and
+each app's budget renders as a live gauge plus a rolling chart so the
+`sliding_window` "flat until the window slides" recovery and the
+`token_bucket` "continuous ramp" recovery are visually distinct, not just
+narrated. See `recording/RECORDING.md` for what it proves, how it was
+produced (including a lab-host Podman/SELinux workaround), and a
+reconciliation-behavior asymmetry between the two algorithms that
+recording this surfaced.
 
 `dashboard/` is a browser-facing convenience used for recording; it wraps
 the same HTTP contract as the curl walkthrough below and is not part of
@@ -169,17 +171,23 @@ than *independent* is pointing both at the same Valkey `namespace`.
 
 ## Validate the request flow
 
-Every app's budget is `capacity: 40` tokens, `estimate_tokens: 40` per
-request — so the *first* request from a given app fully reserves its
-budget, and reconciliation only partially refunds it (the stub backend
-always reports `total_tokens: 10`, refunding 30 of the 40 reserved —
-not enough for another full-estimate admission until either algorithm
-recovers the rest). `gold-tier` uses `window: 10s`; `silver-tier` uses
-`refill_rate: 8` tokens/sec (a full refill in 5s from empty). Both are
-shortened from realistic production values (`window: 1h`,
-a much lower `refill_rate`) purely so recovery is watchable in seconds
-instead of the hour+ a production deployment would take; the mechanism
-is identical either way. Every request must carry `x-tier` (selects the
+`gold-tier` (`sliding_window`) uses `capacity: 40` tokens,
+`estimate_tokens: 40` per request — the *first* request from a given app
+fully reserves its budget, and reconciliation refunds 30 of the 40
+reserved (the stub backend always reports `total_tokens: 10`) but does
+**not** retroactively free that capacity within the window (see "Open
+design questions" below) — so a second request is denied until the
+window itself slides. `silver-tier` (`token_bucket`) instead uses
+`capacity: 10`, `estimate_tokens: 10` — deliberately equal to the stub's
+real usage, refunding ~0 — because `token_bucket`'s reconciliation *does*
+credit any estimate/actual gap straight back into the bucket; at
+`gold-tier`'s larger numbers that refund alone would admit a second
+request almost immediately, defeating the point (this asymmetry was found
+empirically while producing `recording/RECORDING.md`, not by design). Both
+`gold-tier`'s `window: 10s` and `silver-tier`'s `refill_rate: 2` tokens/sec
+are similarly shortened from realistic production values purely so
+recovery is watchable in seconds instead of the hour+ a production
+deployment would take. Every request must carry `x-tier` (selects the
 rule/algorithm) alongside `x-app-id` (selects the per-app budget within
 that rule) — a request missing `x-tier` matches no rule and isn't
 rate-limited by this filter instance at all (see `config.yaml`).
@@ -236,7 +244,7 @@ instance while authoring this demo):
   (`silver-tier`, `token_bucket`), matched purely on `x-tier`, with its
   own budget.
 - app-b's request on gateway B, immediately after: `429` with
-  `X-RateLimit-Remaining-Tokens: 0`, `Retry-After: 2` (varies run to
+  `X-RateLimit-Remaining-Tokens: 0`, `Retry-After: 5` (varies run to
   run: token_bucket's retry-after is a function of the live refill
   math, not a fixed window boundary like sliding_window's) — proving
   the shared-Valkey, cross-instance guarantee holds for `token_bucket`
@@ -269,12 +277,13 @@ Expect `200` on both. What "recovered" means differs by algorithm:
   rolling over); the budget recovers continuously and independently as
   its own past usage ages out.
 - **app-b (token_bucket)**: the bucket has been continuously refilling
-  at `refill_rate: 8` tokens/sec since app-b's last request, plus
-  whatever reconciliation already credited back from the stub backend's
-  actual usage. In this scenario it typically becomes admissible again
-  well before the full 11s wait, since refill is continuous rather than
-  gated on a fixed window boundary — the `sleep 11` above is sized for
-  gold-tier's slower path, not because silver-tier needs it too.
+  at `refill_rate: 2` tokens/sec since app-b's last request (reconciliation
+  itself credits back ~0 here, by design — see "Validate the request flow"
+  above). It becomes admissible again in 5s from exhaustion (`capacity: 10`
+  / `refill_rate: 2`), well before the full 11s wait, since refill is
+  continuous rather than gated on a fixed window boundary — the `sleep 11`
+  above is sized for gold-tier's slower path, not because silver-tier
+  needs it too.
 
 This was verified against a live run of the built gateway binaries
 (`praxis-ai` from the source branch) directly against a real Valkey
@@ -397,11 +406,24 @@ the final feature.
   it's one concrete proposal for maintainer review, not a decision.
 - **Window duration and refill rate are config knobs, not yet
   customer-tunable requirements anywhere in the proposal.** This demo
-  uses `window: 10s` and `refill_rate: 8` purely to make each
+  uses `window: 10s` and `refill_rate: 2` purely to make each
   algorithm's recovery visible in a short recording; nothing in ai#658
   pins either value, and calendar-aligned windows (e.g. reset at UTC
   midnight rather than "most recent N seconds") are a distinct semantic
   that neither algorithm here provides and hasn't been requested yet.
+- **The two algorithms reconcile differently, and that asymmetry isn't
+  documented or decided anywhere upstream.** Found empirically while
+  producing `recording/RECORDING.md`, not by reading a spec:
+  `token_bucket`'s reconciliation credits any estimate/actual gap
+  straight back into the bucket (a continuously-refilling resource), so
+  an over-estimated request effectively unlocks extra capacity the
+  moment it settles; `sliding_window`'s reconciliation does not
+  retroactively shrink what's already counted against the trailing
+  window (a historical-usage ledger), so an over-estimate stays "spent"
+  for the rest of the window regardless of how the request actually
+  settled. Neither behavior is wrong on its own, but which one an
+  operator should *expect* — and whether both should behave the same
+  way — is an open question, not a documented decision.
 - **The Valkey backend is a spike, not yet aligned with
   [grid#83](https://github.com/praxis-proxy/grid/issues/83)**, the
   authoritative spec for Valkey-backed distributed quota state (published

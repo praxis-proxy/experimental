@@ -1,32 +1,40 @@
 {
   "production": "token-rate-limit-per-app-budgets",
   "demonstrated": [
-    "cross_instance_shared_budget: app-a admitted on Gateway A (HTTP 200), then denied on Gateway B (HTTP 429, X-RateLimit-Remaining-Tokens: 0) for the same shared Valkey ledger",
-    "per_app_isolation: app-b admitted on Gateway B (HTTP 200) immediately after app-a's exhaustion in the same Valkey namespace",
-    "per_app_isolation: app-c admitted on Gateway A (HTTP 200) on its own independent, untouched budget",
-    "reservation_admission: each admitted request reserved its estimate_tokens cost atomically via the shared ledger before the response was known",
-    "window_recovery: app-a, previously denied, is admitted again on Gateway A (HTTP 200) once the 10s sliding window aged its earlier reservation out -- no manual reset, no restart, budget recovers purely because the window advanced"
+    "per_rule_algorithm_choice: app-a/app-c matched to gold-tier (sliding_window) via x-tier: gold, app-b matched to silver-tier (token_bucket) via x-tier: silver -- same token_rate_limit filter instance, two algorithms chosen per rule",
+    "cross_instance_shared_budget: app-a admitted on Gateway A (HTTP 200), then denied on Gateway B (HTTP 429, X-RateLimit-Remaining-Tokens: 0) for the same shared Valkey ledger (sliding_window)",
+    "cross_instance_shared_budget: app-b admitted on Gateway A (HTTP 200), then denied on Gateway B (HTTP 429) for the same shared Valkey ledger -- proving the cross-instance guarantee holds for token_bucket too, not just sliding_window",
+    "per_app_isolation: app-c admitted on Gateway A (HTTP 200) on its own independent, untouched budget, immediately after app-a's exhaustion on the same rule/algorithm and Valkey namespace",
+    "reservation_admission: each admitted request reserved its estimate_tokens cost atomically via the shared ledger before the response was known, for either algorithm",
+    "window_recovery: app-a, previously denied, is admitted again on Gateway A (HTTP 200) once the 10s sliding window aged its earlier reservation out -- no manual reset, no restart, budget recovers purely because the window advanced",
+    "token_bucket_recovery: app-b, previously denied, is admitted again on Gateway B (HTTP 200) once silver-tier's token_bucket refilled continuously past its estimate_tokens cost -- a different recovery mechanism than app-a's window slide, no manual reset"
   ],
   "configured": [
-    "window: 10s sliding window (shortened from the README's default 1h purely so the recording could show a full deny -> recover cycle in a watchable clip; the mechanism is identical at any window size)",
-    "capacity: 40 tokens per app",
-    "estimate_tokens: 40",
-    "bucket_key_header: x-app-id",
-    "backend: valkey, shared namespace across both gateway replicas"
+    "gold-tier (sliding_window): window: 10s, capacity: 40 tokens, estimate_tokens: 40 -- a single request fully reserves the window's budget; the stub backend's fixed usage.total_tokens: 10 is intentionally far below the estimate, but sliding_window's reconciliation does not retroactively free capacity already counted against the window (see RECORDING.md's algorithm note) -- exhaustion holds until the window itself slides",
+    "silver-tier (token_bucket): capacity: 10, refill_rate: 2 tokens/sec, estimate_tokens: 10 -- deliberately set equal to the stub backend's fixed usage.total_tokens: 10, so reservation reconciliation refunds ~0 tokens back; token_bucket's reconciliation *does* credit any estimate/actual difference straight back into the bucket (unlike sliding_window's ledger), so leaving a large estimate/actual gap here would let the very next request through well before a real refill occurred",
+    "bucket_key_header: x-app-id (one independent budget per app, within each rule)",
+    "backend: valkey, shared namespace across both gateway replicas, for both rules"
   ],
   "inferred": [],
   "trace_ids": [],
   "validation": {
-    "media": "1920x1080 h264/aac, 48.09s -- passed src/validation/validate-media.js",
+    "media": "1920x1080 h264/aac, ~79s -- passed src/validation/validate-media.js",
     "production_schema": "passed src/validation/validate-production.js",
-    "live_gates": "5 requireGate assertions passed during recording against a live docker-compose stack (see playwright/record.mjs): app-a admitted on A, app-a denied on B (remaining=0), app-b admitted on B, app-c admitted on A, app-a re-admitted on A after the window aged out"
+    "live_gates": "7 requireGate assertions passed during recording against a live docker-compose stack (see playwright/record.mjs): app-a admitted on A, app-a denied on B (sliding_window, remaining=0), app-c admitted on A, app-b admitted on A, app-b denied on B (token_bucket), app-a re-admitted on A after the window aged out, app-b re-admitted on B after its bucket refilled"
   },
+  "dashboard_v2": [
+    "Re-recorded after feedback that the first cut front-loaded all 7 requests into the first ~15s of a ~77s narration, then sat on a static log for the remaining ~60s. dashboard/index.html now schedules each request against offsets derived from narration/narration.srt's cue timestamps, so on-screen action tracks the narration for the full clip instead of finishing early.",
+    "Added a client-side BudgetModel per app (sliding_window: capacity minus reservations still inside the trailing window; token_bucket: continuous linear refill up to capacity, drained per reservation) that replays the exact same arithmetic the Lua reserve/reconcile scripts perform, driven off each request's real timestamp/cost -- not a mock. A requestAnimationFrame loop samples it every frame to animate a live gauge bar and a 30s rolling sparkline per app, so gold-tier's 'flat until the window slides' step function and silver-tier's 'continuous ramp' are visually distinct even between requests, with zero extra network calls.",
+    "Every request still asserts its real HTTP status/headers via requireGate against the live stack (see 'live_gates' above); the model is a visualization layer on top of that, not a replacement for it.",
+    "Re-tuned one timing gap during this pass: the original offset between silver-tier's exhaustion and its cross-instance denial check (5.3s) exceeded token_bucket's exact full-refill time (10 capacity / 2 per sec = 5.0s), so the bucket had already recovered by the time of the check and returned 200 instead of the expected 429. Caught via a dry-run curl replay of the new offsets before re-recording (see RECORDING.md); fixed by tightening the gap to 2.0s (4/10 tokens refilled, safely below the 10 needed)."
+  ],
   "limitations": [
-    "No OPENAI_API_KEY was available in this environment: narration audio used a local macOS `say` TTS fallback instead of the toolkit's OpenAI TTS (scripts/generate-narration.sh), and narration.srt caption timing is an approximate proportional-duration estimate rather than a real Whisper transcription (scripts/generate-captions.sh). Both are flagged deviations, not canonical toolkit output -- re-run with OPENAI_API_KEY set to get the toolkit's default pipeline.",
+    "No OPENAI_API_KEY was available in either recording environment: narration audio used a local macOS `say` TTS fallback instead of the toolkit's OpenAI TTS (scripts/generate-narration.sh), and narration.srt caption timing is an approximate proportional-duration estimate rather than a real Whisper word-level transcription (a small ad hoc substitute script, not part of the upstream toolkit). Both are flagged deviations, not canonical toolkit output -- re-run with OPENAI_API_KEY set to get the toolkit's default pipeline.",
     "No exact_trace evidence gate: this scenario is a single-hop admission decision with no cross-service routing, so there is no distributed trace to correlate. Evidence is instead the exact HTTP status/headers returned by the live gateways, asserted via requireGate during recording.",
     "The browser dashboard (../dashboard/) is a demo-only recording convenience wrapping the same HTTP contract as the docker-compose README's curl walkthrough; it is not part of the Praxis AI filter chain and ships only with this recording, not upstream.",
     "App names (app-a/app-b/app-c) are placeholders. The real customer scenario's application names are intentionally excluded (NDA) and enforced via production.yaml's redaction.deny list.",
-    "This remains early exploratory work validating ai#658's sliding-window design and the ai#129 bucket-key proposal, not a substitute for their own review threads -- see the parent README's \"Current scope\" section.",
-    "The window is a fixed 10s sliding window in this build. Neither ai#658 nor ai#121 specifies an algorithm (sliding window vs. token bucket vs. fixed window); praxis#551 (a separate, core-proxy rate-limit issue) already proposes per-rule algorithm choice and configurable window duration -- see the parent README's \"Open design questions\" section for the follow-up raised there."
+    "This remains early exploratory work validating ai#658's sliding-window design, the ai#129 bucket-key proposal, and the new per-rule algorithm choice (ai#789/praxis#551), not a substitute for their own review threads -- see the parent README's \"Current scope\" section.",
+    "The two algorithms' reconciliation semantics differ in a way this recording surfaced empirically, not just by design intent: token_bucket's reconcile credits any estimate/actual gap straight back into the bucket (a continuously-refilling resource), while sliding_window's reconcile does not retroactively shrink what's already counted against the trailing window (a historical-usage ledger) -- see the parent README's \"Open design questions\" section for why the choice of algorithm, and this asymmetry, is still open upstream.",
+    "This recording was produced on a remote Linux (RHEL 9) lab host via Podman + Compose, not the local macOS spike environment used for the first (single-algorithm) recording -- required a static ffmpeg/ffprobe build (no matching dnf package on this host) and an SELinux relabel (chcon -Rt container_file_t) of the bind-mounted config.yaml/dashboard files, since Podman on an SELinux-enforcing host denies containers read access to unlabeled bind mounts by default."
   ]
 }
