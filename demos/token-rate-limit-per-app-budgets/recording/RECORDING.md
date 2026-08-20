@@ -14,15 +14,6 @@ an `x-tier` header, per ai#789/praxis#551.
 **Watch:** `output/k8s-real-pods-token-rate-limit.mp4` (1920x1080, h264/aac,
 ~143s)
 
-`dashboard/index.html` uses a generic (unbranded) dark theme, deliberately
-kept free of any company branding since this repo is meant for
-community/contributor adoption. A Red Hat-branded skin variant (dark theme
-using Red Hat's own brand palette/type, per
-redhat.com/en/about/brand/standards) was also produced and recorded/
-validated identically to this one, for the team to decide separately
-whether a branded variant belongs in this demo at all; it is intentionally
-not part of this PR.
-
 An earlier, single-algorithm (`sliding_window`-only) recording of this same
 demo existed before the mixed-algorithm scenario landed; it has been
 superseded and removed since it no longer matches the current
