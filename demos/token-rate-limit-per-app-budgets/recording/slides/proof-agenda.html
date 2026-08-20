@@ -4,45 +4,219 @@
 <meta charset="utf-8" />
 <title>Per-app token budgets — proof agenda</title>
 <style>
+  * { box-sizing: border-box; }
   body {
     margin: 0; width: 1920px; height: 1080px;
     background: #081321; color: #eef7ff;
     font: 28px system-ui, sans-serif; padding: 100px; box-sizing: border-box;
+    position: relative; overflow: hidden;
   }
-  h1 { font-size: 58px; color: #67e8f9; margin: 0 0 20px; }
-  .lede { color: #9db3c8; font-size: 30px; margin-bottom: 60px; }
-  .flow { display: flex; gap: 24px; align-items: center; margin: 60px 0 80px; }
+  section { position: absolute; inset: 0; padding: 100px; opacity: 0; transition: opacity 0.4s ease; }
+  section.active { opacity: 1; }
+  .eyebrow { letter-spacing: 3px; font-size: 20px; font-weight: 700; color: #69e0a4; margin-bottom: 14px; }
+  h1 { font-size: 54px; color: #67e8f9; margin: 0 0 20px; line-height: 1.15; }
+  .lede { color: #9db3c8; font-size: 28px; margin-bottom: 50px; max-width: 1500px; }
+
+  /* Section 1: title + cards */
+  .cards { display: flex; gap: 24px; margin-top: 40px; }
+  .card {
+    flex: 1; border-top: 4px solid #416b8d; border-radius: 10px;
+    background: #10253b; padding: 28px 26px;
+  }
+  .card.c1 { border-top-color: #69e0a4; }
+  .card.c2 { border-top-color: #f0b354; }
+  .card.c3 { border-top-color: #7ec8f5; }
+  .card.c4 { border-top-color: #e08fe0; }
+  .card h3 { margin: 0 0 12px; font-size: 26px; }
+  .card p { margin: 0; color: #9db3c8; font-size: 21px; line-height: 1.5; }
+
+  /* Section 2: architecture */
+  .flow { display: flex; gap: 20px; align-items: center; margin: 40px 0 50px; }
   .node {
-    border: 2px solid #416b8d; border-radius: 14px; padding: 30px;
-    background: #10253b; text-align: center; flex: 1;
+    border: 2px solid #416b8d; border-radius: 14px; padding: 24px;
+    background: #10253b; text-align: center; flex: 1; font-size: 24px; font-weight: 700;
   }
+  .node small { display: block; color: #9db3c8; font-size: 17px; font-weight: 400; margin-top: 6px; }
   .node.ledger { border-color: #67e8f9; }
-  .arrow { font-size: 40px; color: #416b8d; }
-  ol { font-size: 30px; line-height: 1.8; padding-left: 40px; }
-  ol b { color: #69e0a4; }
-  small { display: block; color: #9db3c8; margin-top: 40px; font-size: 22px; }
+  .arrow { font-size: 34px; color: #416b8d; }
+  .cols { display: flex; gap: 24px; }
+  .col { flex: 1; background: #0d1d30; border-radius: 12px; padding: 24px 28px; }
+  .col h4 { margin: 0 0 12px; font-size: 22px; color: #9db3c8; }
+  .col ul { margin: 0; padding-left: 22px; font-size: 20px; line-height: 1.7; }
+
+  /* Section 3: animated topology preview */
+  .topo { position: relative; width: 100%; height: 620px; margin-top: 30px; }
+  .box {
+    position: absolute; border: 2px solid #416b8d; border-radius: 12px; background: #10253b;
+    padding: 16px 20px; font-size: 20px; font-weight: 700; text-align: center; width: 220px;
+  }
+  .box small { display: block; color: #9db3c8; font-size: 14px; font-weight: 400; margin-top: 4px; }
+  .box.app { border-color: #69e0a4; }
+  .box.gw { border-color: #7ec8f5; }
+  .box.valkey { border-color: #67e8f9; width: 240px; }
+  .box.backend { border-color: #e08fe0; }
+  .dot {
+    position: absolute; width: 22px; height: 22px; border-radius: 50%;
+    background: #67e8f9; box-shadow: 0 0 16px 4px rgba(103,232,249,0.7);
+    transition: left 0.9s ease, top 0.9s ease, background 0.3s ease, box-shadow 0.3s ease, opacity 0.3s ease;
+    opacity: 0;
+  }
+  .dot.admit { background: #69e0a4; box-shadow: 0 0 16px 4px rgba(105,224,164,0.7); }
+  .dot.deny { background: #f87171; box-shadow: 0 0 16px 4px rgba(248,113,113,0.7); }
+  .caption {
+    position: absolute; left: 0; right: 0; bottom: 0; text-align: center;
+    font-size: 26px; font-weight: 700; min-height: 40px;
+  }
+  .caption.admit { color: #69e0a4; }
+  .caption.deny { color: #f87171; }
 </style>
 </head>
 <body>
-  <h1>Per-app token budgets, mixed algorithms, shared across gateway replicas</h1>
-  <p class="lede">What this demo proves — a scoped MVP slice of ai#658/ai#789, exercised on a two-instance stack.</p>
+  <section id="s1" class="active">
+    <div class="eyebrow">TOKEN RATE LIMIT DEMONSTRATION</div>
+    <h1>Per-app token budgets, mixed algorithms, shared across gateway replicas</h1>
+    <p class="lede">Two independent Praxis AI gateways, three applications, one shared budget per app.</p>
+    <div class="cards">
+      <div class="card c1"><h3>Three apps</h3><p>app-a, app-b, and app-c each draw against their own token budget.</p></div>
+      <div class="card c2"><h3>Two gateways</h3><p>Independent replicas &mdash; same config, same Valkey namespace.</p></div>
+      <div class="card c3"><h3>Two rules, two algorithms</h3><p>gold-tier (sliding_window) and silver-tier (token_bucket), matched by <code>x-tier</code>.</p></div>
+      <div class="card c4"><h3>One shared ledger</h3><p>Budgets tracked in Valkey, not per-replica memory.</p></div>
+    </div>
+  </section>
 
-  <div class="flow">
-    <div class="node">Gateway A<br /><small>token_rate_limit: gold-tier (sliding_window) + silver-tier (token_bucket)</small></div>
-    <div class="arrow">&#8596;</div>
-    <div class="node ledger">Shared Valkey ledger<br /><small>one budget per x-app-id, per rule</small></div>
-    <div class="arrow">&#8596;</div>
-    <div class="node">Gateway B<br /><small>token_rate_limit: gold-tier (sliding_window) + silver-tier (token_bucket)</small></div>
-  </div>
+  <section id="s2">
+    <div class="eyebrow">HOW THE PIECES WORK TOGETHER</div>
+    <h1>Match a rule. Reserve a budget. Then forward.</h1>
+    <p class="lede">Every request is matched to a rule and its cost reserved before it ever reaches the backend.</p>
+    <div class="flow">
+      <div class="node">Gateway A or B<br /><small>token_rate_limit filter</small></div>
+      <div class="arrow">&#8594;</div>
+      <div class="node">Rule match<br /><small>by <code>x-tier</code> header</small></div>
+      <div class="arrow">&#8594;</div>
+      <div class="node ledger">Shared Valkey ledger<br /><small>budget keyed by <code>x-app-id</code></small></div>
+      <div class="arrow">&#8594;</div>
+      <div class="node">Backend<br /><small>only reached if admitted</small></div>
+    </div>
+    <div class="cols">
+      <div class="col">
+        <h4>3 applications</h4>
+        <ul>
+          <li>app-a &rarr; gold-tier</li>
+          <li>app-c &rarr; gold-tier</li>
+          <li>app-b &rarr; silver-tier</li>
+        </ul>
+      </div>
+      <div class="col">
+        <h4>2 rules, 2 algorithms</h4>
+        <ul>
+          <li>gold-tier: sliding_window, window 10s, capacity 40</li>
+          <li>silver-tier: token_bucket, capacity 10, refill 2/s</li>
+        </ul>
+      </div>
+      <div class="col">
+        <h4>1 shared backend</h4>
+        <ul>
+          <li>Valkey, one namespace</li>
+          <li>Both gateway replicas, both rules</li>
+        </ul>
+      </div>
+    </div>
+  </section>
 
-  <ol>
-    <li><b>Per-rule algorithm choice:</b> app-a/app-c match gold-tier (sliding_window); app-b matches silver-tier (token_bucket) &mdash; same filter, two algorithms, chosen per rule.</li>
-    <li><b>Cross-instance enforcement, both algorithms:</b> app-a's sliding-window budget and app-b's token-bucket budget, each exhausted on Gateway A, are denied on Gateway B too.</li>
-    <li><b>Per-app isolation:</b> app-c's budget is untouched by app-a's exhaustion, even under the same algorithm and rule.</li>
-    <li><b>Reservation-based admission:</b> each admitted request reserves its estimated cost up front, atomically, via the shared ledger, for either algorithm.</li>
-    <li><b>Automatic recovery, two different mechanisms:</b> app-a's budget recovers once its reservation ages out of the sliding window; app-b's recovers as its bucket refills continuously &mdash; no manual reset for either.</li>
-  </ol>
+  <section id="s3">
+    <div class="eyebrow">A PREVIEW, BEFORE THE LIVE PROOF</div>
+    <h1>Watch two requests move through this path</h1>
+    <p class="lede">Matched to a rule, reserved against the shared ledger, and only then forwarded &mdash; or stopped cold before ever reaching a backend.</p>
+    <div class="topo">
+      <div class="box app" id="box-app" style="left:0; top:260px;">app-a<br /><small>gold-tier</small></div>
+      <div class="box gw" id="box-gwa" style="left:420px; top:80px;">Gateway A<br /><small>independent replica</small></div>
+      <div class="box gw" id="box-gwb" style="left:420px; top:440px;">Gateway B<br /><small>independent replica</small></div>
+      <div class="box valkey" id="box-valkey" style="left:840px; top:260px;">Shared Valkey ledger<br /><small>app-a's gold-tier budget</small></div>
+      <div class="box backend" id="box-backend" style="left:1300px; top:260px;">Backend<br /><small>only reached if admitted</small></div>
+      <div class="dot" id="dot"></div>
+      <div class="caption" id="topo-caption"></div>
+    </div>
+  </section>
 
-  <small>Scope: two gateway replicas, one Valkey instance, no Grid, no multi-cluster routing, no authentication. See the demo README for what's explicitly out of scope.</small>
+<script>
+  function centerOf(el, host) {
+    const r = el.getBoundingClientRect();
+    const h = host.getBoundingClientRect();
+    return { x: r.left - h.left + r.width / 2 - 11, y: r.top - h.top + r.height / 2 - 11 };
+  }
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+
+  function showSection(id) {
+    document.querySelectorAll('section').forEach(s => s.classList.toggle('active', s.id === id));
+  }
+
+  async function runTopoPreview() {
+    const topo = document.querySelector('.topo');
+    const dot = document.getElementById('dot');
+    const caption = document.getElementById('topo-caption');
+    const boxes = {
+      app: document.getElementById('box-app'),
+      gwa: document.getElementById('box-gwa'),
+      gwb: document.getElementById('box-gwb'),
+      valkey: document.getElementById('box-valkey'),
+      backend: document.getElementById('box-backend'),
+    };
+    const at = key => centerOf(boxes[key], topo);
+    const moveTo = (key, cls) => {
+      const p = at(key);
+      dot.style.left = p.x + 'px';
+      dot.style.top = p.y + 'px';
+      if (cls) dot.className = 'dot ' + cls;
+    };
+    const setCaption = (text, cls) => { caption.textContent = text; caption.className = 'caption ' + (cls || ''); };
+
+    // Cycle 1: admitted path (app-a -> Gateway A -> Valkey -> Backend)
+    moveTo('app');
+    dot.style.opacity = '1';
+    setCaption('app-a sends a request to Gateway A');
+    await wait(900);
+    moveTo('gwa');
+    await wait(900);
+    setCaption('Gateway A matches gold-tier, reserves against the shared ledger');
+    moveTo('valkey');
+    await wait(900);
+    setCaption('Budget available -- reservation admitted', 'admit');
+    moveTo('valkey', 'admit');
+    await wait(700);
+    moveTo('backend', 'admit');
+    setCaption('Forwarded to the backend -- HTTP 200', 'admit');
+    await wait(1400);
+    dot.style.opacity = '0';
+    await wait(500);
+
+    // Cycle 2: denied path (app-a -> Gateway B -> Valkey, already spent -> stop)
+    moveTo('app');
+    dot.className = 'dot';
+    dot.style.opacity = '1';
+    setCaption("app-a's next request goes to Gateway B instead -- a different process");
+    await wait(900);
+    moveTo('gwb');
+    await wait(900);
+    setCaption('Gateway B matches the same gold-tier rule, checks the same shared ledger');
+    moveTo('valkey');
+    await wait(900);
+    setCaption("Budget already spent by app-a's earlier request -- denied", 'deny');
+    moveTo('valkey', 'deny');
+    await wait(1200);
+    setCaption('Stopped cold -- HTTP 429, the backend is never reached', 'deny');
+    await wait(1600);
+    dot.style.opacity = '0';
+  }
+
+  async function run() {
+    showSection('s1');
+    await wait(11289);
+    showSection('s2');
+    await wait(33625 - 11289);
+    showSection('s3');
+    runTopoPreview();
+  }
+  run();
+</script>
 </body>
 </html>

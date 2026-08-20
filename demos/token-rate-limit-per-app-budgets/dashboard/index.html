@@ -7,108 +7,110 @@
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   body {
-    margin: 0; width: 1920px; min-height: 1080px;
+    margin: 0; width: 1920px; height: 1080px; overflow: hidden;
     background: #081321; color: #eef7ff;
-    font: 22px/1.4 system-ui, -apple-system, sans-serif;
-    padding: 48px 80px;
+    font: 18px/1.3 system-ui, -apple-system, sans-serif;
+    padding: 26px 64px;
+    display: flex; flex-direction: column;
   }
-  h1 { font-size: 44px; color: #67e8f9; margin: 0 0 6px; }
-  .subtitle { color: #9db3c8; font-size: 22px; margin: 0 0 28px; }
-  .topology {
-    display: flex; gap: 28px; align-items: stretch; margin-bottom: 24px;
-  }
-  .gw {
-    flex: 1; border: 2px solid #416b8d; border-radius: 16px;
-    background: #10253b; padding: 20px 28px; transition: box-shadow 0.15s, border-color 0.15s;
-  }
-  .gw.pulse { border-color: #67e8f9; box-shadow: 0 0 0 6px rgba(103,232,249,0.18); }
-  .gw h2 { margin: 0 0 4px; font-size: 26px; color: #67e8f9; }
-  .gw .role { color: #9db3c8; font-size: 17px; margin-bottom: 14px; }
-  .apps { display: flex; gap: 16px; }
-  .app-btn {
-    flex: 1; padding: 14px 10px; border-radius: 12px; border: 2px solid #2d4a68;
-    background: #16324f; color: #eef7ff; font-size: 19px; font-weight: 600;
-    cursor: pointer; transition: transform 0.1s, border-color 0.1s;
-  }
-  .app-btn:hover { border-color: #67e8f9; }
-  .app-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .app-btn.pulse { transform: scale(0.96); border-color: #fff; }
-  .app-a { border-color: #69e0a4; } .app-b { border-color: #7ec8f5; } .app-c { border-color: #e08fe0; }
+  h1 { font-size: 32px; color: #67e8f9; margin: 0 0 4px; }
+  .subtitle { color: #9db3c8; font-size: 17px; margin: 0 0 16px; }
+  .pod { color: #7ec8f5; font-size: 12px; font-family: ui-monospace, SFMono-Regular, monospace; margin-bottom: 8px; }
+  .pod.pending { color: #6b7f92; font-style: italic; }
 
   .legend {
-    display: flex; gap: 20px; margin-bottom: 24px;
+    display: flex; gap: 20px; margin-bottom: 14px;
   }
   .legend .card {
-    flex: 1; border-radius: 14px; padding: 14px 22px; display: flex; align-items: center; gap: 16px;
+    flex: 1; border-radius: 12px; padding: 8px 20px; display: flex; align-items: center; gap: 14px;
     border: 2px solid #2d4a68; background: #0d1d30;
   }
-  .legend .swatch { width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; }
+  .legend .swatch { width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0; }
   .legend .gold .swatch { background: #f0b354; }
   .legend .silver .swatch { background: #7ec8f5; }
-  .legend .txt b { display: block; font-size: 19px; }
-  .legend .txt span { color: #9db3c8; font-size: 15px; }
+  .legend .txt b { display: block; font-size: 16px; }
+  .legend .txt span { color: #9db3c8; font-size: 13px; }
 
-  .budgets { display: flex; gap: 20px; margin-bottom: 20px; }
+  .budgets { display: flex; gap: 20px; margin-bottom: 12px; }
   .budget-card {
-    flex: 1; border-radius: 14px; padding: 16px 22px; background: #10253b;
-    border-left: 8px solid #416b8d; transition: box-shadow 0.2s;
+    flex: 1; border-radius: 12px; padding: 10px 18px; background: #10253b;
+    border-left: 6px solid #416b8d; transition: box-shadow 0.2s;
   }
   .budget-card.app-a { border-left-color: #69e0a4; }
   .budget-card.app-b { border-left-color: #7ec8f5; }
   .budget-card.app-c { border-left-color: #e08fe0; }
   .budget-card.flash { box-shadow: 0 0 0 4px rgba(105,224,164,0.35); }
-  .budget-card .name { font-size: 20px; font-weight: 700; margin-bottom: 2px; }
-  .budget-card .state { font-size: 26px; font-weight: 700; }
+  .budget-card .name { font-size: 16px; font-weight: 700; margin-bottom: 1px; }
+  .budget-card .pod { margin-bottom: 4px; }
+  .budget-card .state { font-size: 20px; font-weight: 700; }
   .budget-card .state.admitted { color: #69e0a4; }
   .budget-card .state.denied { color: #f87171; }
   .budget-card .state.idle { color: #9db3c8; }
-  .budget-card .detail { color: #9db3c8; font-size: 14px; margin: 2px 0 10px; }
+  .budget-card .detail { color: #9db3c8; font-size: 12px; margin: 1px 0 6px; }
   .gauge-track {
-    width: 100%; height: 14px; border-radius: 7px; background: #050d17;
-    border: 1px solid #2d4a68; overflow: hidden; margin-bottom: 8px;
+    width: 100%; height: 10px; border-radius: 5px; background: #050d17;
+    border: 1px solid #2d4a68; overflow: hidden; margin-bottom: 6px;
   }
-  .gauge-fill { height: 100%; border-radius: 7px; transition: width 0.1s linear; }
+  .gauge-fill { height: 100%; border-radius: 5px; transition: width 0.1s linear; }
   .gauge-fill.gold { background: linear-gradient(90deg, #b8791f, #f0b354); }
   .gauge-fill.silver { background: linear-gradient(90deg, #2e7bab, #7ec8f5); }
-  .gauge-label { display: flex; justify-content: space-between; font-size: 14px; color: #9db3c8; margin-bottom: 6px; }
-  canvas.spark { display: block; width: 100%; height: 70px; background: #050d17; border-radius: 8px; border: 1px solid #1c3450; }
+  .gauge-label { display: flex; justify-content: space-between; font-size: 12px; color: #9db3c8; margin-bottom: 4px; }
+  canvas.spark { display: block; width: 100%; height: 46px; background: #050d17; border-radius: 8px; border: 1px solid #1c3450; }
 
-  .controls { margin-bottom: 18px; display: flex; align-items: center; gap: 20px; }
+  .controls { margin-bottom: 10px; display: flex; align-items: center; gap: 20px; }
   #run-scenario {
-    font-size: 20px; font-weight: 700; padding: 14px 32px; border-radius: 12px;
+    font-size: 16px; font-weight: 700; padding: 10px 26px; border-radius: 10px;
     border: none; background: #67e8f9; color: #08131f; cursor: pointer;
   }
   #run-scenario:disabled { opacity: 0.5; cursor: not-allowed; }
   #phase {
-    font-size: 20px; font-weight: 700; color: #67e8f9; min-height: 28px;
+    font-size: 16px; font-weight: 700; color: #67e8f9; min-height: 22px;
   }
 
-  .lower { display: flex; gap: 20px; }
+  .lower { display: flex; gap: 16px; flex: 1; min-height: 0; }
+  #log-panel { flex: 2.1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+  #log-panel h3 { margin: 0 0 6px; font-size: 14px; color: #9db3c8; font-weight: 600; }
   #log {
-    flex: 3; background: #050d17; border: 2px solid #2d4a68; border-radius: 14px;
-    padding: 16px 22px; height: 300px; overflow-y: auto;
-    font: 17px/1.5 ui-monospace, SFMono-Regular, monospace;
+    flex: 1; min-width: 0; min-height: 0; background: #050d17; border: 2px solid #2d4a68; border-radius: 14px;
+    padding: 12px 16px; overflow-y: auto;
+    font: 13px/1.35 ui-monospace, SFMono-Regular, monospace;
   }
+  #gwlogs-panel { flex: 2.3; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+  #gwlogs-panel h3 { margin: 0 0 6px; font-size: 14px; color: #9db3c8; font-weight: 600; }
+  .gwlog-split { display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; min-width: 0; }
+  .gwlog-col { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; background: #050d17; border: 2px solid #2d4a68; border-radius: 14px; padding: 8px 14px; }
+  .gwlog-label { font-size: 12px; color: #67e8f9; font-weight: 700; margin-bottom: 3px; flex-shrink: 0; }
+  .gwlog-label .pod { display: inline; margin: 0; }
+  .gwlog-body { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; font: 12px/1.55 ui-monospace, SFMono-Regular, monospace; color: #9db3c8; }
+  .gwlog-body .line {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    padding: 0 0; border-bottom: 1px solid #0d1d30;
+  }
+  .gwlog-body .line.access { color: #7ec8f5; }
+  .gwlog-body .line.deny { color: #f87171; }
+  .gwlog-body .line.meta { color: #69e0a4; font-style: italic; }
   #log .row { padding: 3px 0; border-bottom: 1px solid #16324f; }
   #log .row:last-child { border-bottom: none; }
   #log .ok { color: #69e0a4; }
   #log .denied { color: #f87171; }
-  #log .step { color: #67e8f9; font-weight: 700; }
+  #log .step { color: #67e8f9; font-weight: 700; padding-top: 8px; }
+  #log .tele { display: block; white-space: pre-wrap; word-break: break-word; }
+  #log .tele .dim { color: #6b8299; }
 
   #checklist {
-    flex: 2; background: #0d1d30; border: 2px solid #2d4a68; border-radius: 14px;
-    padding: 16px 22px; height: 300px; overflow-y: auto;
+    flex: 1.4; min-width: 0; background: #0d1d30; border: 2px solid #2d4a68; border-radius: 14px;
+    padding: 12px 16px; overflow-y: auto;
   }
-  #checklist h3 { margin: 0 0 10px; font-size: 18px; color: #9db3c8; font-weight: 600; }
+  #checklist h3 { margin: 0 0 6px; font-size: 14px; color: #9db3c8; font-weight: 600; }
   #checklist .item {
-    display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; opacity: 0.25;
+    display: flex; gap: 10px; align-items: flex-start; padding: 5px 0; opacity: 0.25;
     transition: opacity 0.4s;
-    font-size: 16px; line-height: 1.4;
+    font-size: 13px; line-height: 1.35;
   }
   #checklist .item.done { opacity: 1; }
   #checklist .item .box {
-    flex-shrink: 0; width: 20px; height: 20px; border-radius: 5px; border: 2px solid #416b8d;
-    display: flex; align-items: center; justify-content: center; font-size: 14px; margin-top: 1px;
+    flex-shrink: 0; width: 16px; height: 16px; border-radius: 5px; border: 2px solid #416b8d;
+    display: flex; align-items: center; justify-content: center; font-size: 12px; margin-top: 1px;
   }
   #checklist .item.done .box { background: #69e0a4; border-color: #69e0a4; color: #08131f; }
 </style>
@@ -116,27 +118,6 @@
 <body>
   <h1>Per-app token budgets — mixed algorithms, shared across gateway replicas</h1>
   <p class="subtitle">Two <code>token_rate_limit</code> rules matched by <code>x-tier</code>, each keyed by <code>x-app-id</code>: <strong>gold-tier</strong> (sliding_window) for app-a/app-c, <strong>silver-tier</strong> (token_bucket) for app-b — both backed by the same shared Valkey namespace.</p>
-
-  <div class="topology">
-    <div class="gw" id="gw-a">
-      <h2>Gateway A</h2>
-      <div class="role">independent replica &middot; same config &middot; same Valkey namespace</div>
-      <div class="apps">
-        <button class="app-btn app-a" data-gw="a" data-app="app-a">Send as app-a (gold)</button>
-        <button class="app-btn app-b" data-gw="a" data-app="app-b">Send as app-b (silver)</button>
-        <button class="app-btn app-c" data-gw="a" data-app="app-c">Send as app-c (gold)</button>
-      </div>
-    </div>
-    <div class="gw" id="gw-b">
-      <h2>Gateway B</h2>
-      <div class="role">independent replica &middot; same config &middot; same Valkey namespace</div>
-      <div class="apps">
-        <button class="app-btn app-a" data-gw="b" data-app="app-a">Send as app-a (gold)</button>
-        <button class="app-btn app-b" data-gw="b" data-app="app-b">Send as app-b (silver)</button>
-        <button class="app-btn app-c" data-gw="b" data-app="app-c">Send as app-c (gold)</button>
-      </div>
-    </div>
-  </div>
 
   <div class="legend">
     <div class="card gold">
@@ -152,6 +133,7 @@
   <div class="budgets">
     <div class="budget-card app-a" id="budget-app-a">
       <div class="name">app-a &middot; gold-tier (sliding_window)</div>
+      <div class="pod pending" id="pod-app-a">pod: resolving&hellip;</div>
       <div class="state idle" id="state-app-a">idle</div>
       <div class="detail" id="detail-app-a">no requests yet</div>
       <div class="gauge-label"><span>remaining</span><span id="gauge-num-app-a">40 / 40</span></div>
@@ -160,6 +142,7 @@
     </div>
     <div class="budget-card app-b" id="budget-app-b">
       <div class="name">app-b &middot; silver-tier (token_bucket)</div>
+      <div class="pod pending" id="pod-app-b">pod: resolving&hellip;</div>
       <div class="state idle" id="state-app-b">idle</div>
       <div class="detail" id="detail-app-b">no requests yet</div>
       <div class="gauge-label"><span>remaining</span><span id="gauge-num-app-b">10 / 10</span></div>
@@ -168,6 +151,7 @@
     </div>
     <div class="budget-card app-c" id="budget-app-c">
       <div class="name">app-c &middot; gold-tier (sliding_window)</div>
+      <div class="pod pending" id="pod-app-c">pod: resolving&hellip;</div>
       <div class="state idle" id="state-app-c">idle</div>
       <div class="detail" id="detail-app-c">no requests yet</div>
       <div class="gauge-label"><span>remaining</span><span id="gauge-num-app-c">40 / 40</span></div>
@@ -182,7 +166,23 @@
   </div>
 
   <div class="lower">
-    <div id="log"></div>
+    <div id="log-panel">
+      <h3>Live request telemetry &mdash; real fields from each app pod's actual HTTP call, not simulated</h3>
+      <div id="log"></div>
+    </div>
+    <div id="gwlogs-panel">
+      <h3>Live gateway pod logs &mdash; real stdout, streamed via the Kubernetes API (kubectl logs -f equivalent)</h3>
+      <div class="gwlog-split">
+        <div class="gwlog-col">
+          <div class="gwlog-label">Gateway A <span class="pod pending" id="gwlog-pod-a">resolving&hellip;</span></div>
+          <div class="gwlog-body" id="gwlog-a"></div>
+        </div>
+        <div class="gwlog-col">
+          <div class="gwlog-label">Gateway B <span class="pod pending" id="gwlog-pod-b">resolving&hellip;</span></div>
+          <div class="gwlog-body" id="gwlog-b"></div>
+        </div>
+      </div>
+    </div>
     <div id="checklist">
       <h3>What this proves</h3>
       <div class="item" data-key="algo"><div class="box"></div><div>Per-rule algorithm choice: gold-tier (sliding_window) vs silver-tier (token_bucket), matched by <code>x-tier</code></div></div>
@@ -340,47 +340,83 @@
 
   const TIER_BY_APP = { 'app-a': 'gold', 'app-c': 'gold', 'app-b': 'silver' };
 
-  async function sendRequest(gw, app) {
-    pulse(document.getElementById('gw-' + gw));
-    pulse(document.querySelector(`.app-btn.${app}[data-gw="${gw}"]`));
+  function shortPod(name) {
+    return name && name.length > 28 ? name.slice(0, 28) + '…' : name;
+  }
 
-    const path = gw === 'a' ? '/a/v1/chat/completions' : '/b/v1/chat/completions';
+  // -------------------------------------------------------------------
+  // Real identity resolution -- these calls never touch a gateway or a
+  // budget; they only ask each app pod for its own Downward-API pod name
+  // (/whoami) or the Kubernetes API's live answer for which pod currently
+  // backs a gateway Service (/gateway-pod). Nothing here is invented
+  // client-side.
+  // -------------------------------------------------------------------
+  const ipToApp = {}; // real client_ip -> app_id, learned from /whoami's Downward-API pod_ip
+
+  async function loadIdentities() {
+    for (const app of ['app-a', 'app-b', 'app-c']) {
+      try {
+        const res = await fetch(`/apps/${app}/whoami`);
+        const data = await res.json();
+        if (data.pod_ip) ipToApp[data.pod_ip] = data.app_id;
+        const el = document.getElementById('pod-' + app);
+        el.textContent = `pod: ${data.app_pod}`;
+        el.classList.remove('pending');
+      } catch {
+        document.getElementById('pod-' + app).textContent = 'pod: lookup failed';
+      }
+    }
+    // Gateway pod identities are resolved independently by the gateway-log
+    // panels themselves (see startGatewayLogStream) from their own SSE
+    // stream's opening line -- no separate lookup needed here.
+  }
+
+  function telemetryRow(data, gwLabel) {
+    const row = document.createElement('div');
+    const admitted = data.status === 200;
+    row.className = 'row tele ' + (admitted ? 'ok' : 'denied');
+    const time = new Date().toISOString().slice(11, 23);
+    const rl = data.rate_limit || {};
+    const rateLimitLine = rl.remaining_tokens !== null && rl.remaining_tokens !== undefined
+      ? `remaining=${rl.remaining_tokens}/${rl.limit_tokens} retry-after=${rl.retry_after}s reset=${rl.reset_tokens}s`
+      : '(no X-RateLimit-* headers on this response -- Praxis only attaches them on 429s)';
+    row.innerHTML =
+      `<span class="dim">${time}</span> POST /v1/chat/completions x-app-id=${data.app_id} x-tier=${data.tier}\n` +
+      `  <span class="dim">from pod</span> ${shortPod(data.app_pod)} <span class="dim">-&gt;</span> ${gwLabel} <span class="dim">pod</span> ${shortPod(data.gateway_pod)}\n` +
+      `  HTTP ${data.status} ${admitted ? '(admitted)' : '(denied)'} <span class="dim">in</span> ${data.latency_ms}ms <span class="dim">req</span> ${data.request_id.slice(0, 8)}\n` +
+      `  <span class="dim">${rateLimitLine}</span>`;
+    logEl.appendChild(row);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  async function sendRequest(gw, app) {
     const t = Date.now();
-    const res = await fetch(path, {
+    const res = await fetch(`/apps/${app}/send`, {
       method: 'POST',
-      headers: { 'x-app-id': app, 'x-tier': TIER_BY_APP[app], 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'hi' }] }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gateway: gw }),
     });
-    const remaining = res.headers.get('x-ratelimit-remaining-tokens');
-    const limit = res.headers.get('x-ratelimit-limit-tokens');
-    const retryAfter = res.headers.get('retry-after');
-    const admitted = res.status === 200;
+    const data = await res.json();
+    const admitted = data.status === 200;
     const gwLabel = gw === 'a' ? 'Gateway A' : 'Gateway B';
+    const retryAfter = data.rate_limit && data.rate_limit.retry_after;
 
     const wasDenied = document.getElementById('state-' + app).textContent === 'denied';
     if (admitted) models[app].record(t, ESTIMATE[app]);
 
-    logRow(
-      `${gwLabel} ${app}: HTTP ${res.status}${admitted ? ' (admitted)' : ' (denied)'}` +
-        (remaining !== null ? ` — remaining=${remaining}/${limit} retry-after=${retryAfter}s` : ''),
-      admitted ? 'ok' : 'denied',
-    );
+    telemetryRow(data, gwLabel);
 
     const stateEl = document.getElementById('state-' + app);
     const detailEl = document.getElementById('detail-' + app);
     stateEl.textContent = admitted ? 'admitted' : 'denied';
     stateEl.className = 'state ' + (admitted ? 'admitted' : 'denied');
     detailEl.textContent = admitted
-      ? `last admitted on ${gwLabel}`
+      ? `last admitted on ${gwLabel} (pod ${shortPod(data.gateway_pod)}) in ${data.latency_ms}ms`
       : `denied on ${gwLabel} — retry after ${retryAfter}s`;
     if (admitted && wasDenied) flashCard(app);
 
-    return { admitted, remaining, limit, retryAfter, status: res.status };
+    return { admitted, status: data.status, retryAfter, ...data };
   }
-
-  document.querySelectorAll('.app-btn').forEach(btn => {
-    btn.addEventListener('click', () => sendRequest(btn.dataset.gw, btn.dataset.app));
-  });
 
   const wait = ms => new Promise(r => setTimeout(r, ms));
 
@@ -464,8 +500,75 @@
     runBtn.disabled = false;
   }
 
+  // -------------------------------------------------------------------
+  // Live gateway pod logs -- Server-Sent-Events streams of each gateway
+  // pod's actual stdout (see k8s/04-apps.yaml's /gw-logs), the same data
+  // `kubectl logs -f` reads. Every field shown is pulled straight out of
+  // the real log line (regex-extracted, nothing invented) -- reformatted
+  // only to put the identifying fields first so they survive one-line
+  // truncation, and to drop the module-path boilerplate that would
+  // otherwise crowd them out. The raw, unmodified line is always kept in
+  // the `title` attribute for hover. `client_ip` is the calling app pod's
+  // real IP; it's resolved to a human app-id via the ipToApp map built
+  // from each app pod's own /whoami (its own Downward-API pod_ip) in
+  // loadIdentities() -- the gateway's access log has no app-id field of
+  // its own to log, this is a real cross-reference, not a fabricated one.
+  // -------------------------------------------------------------------
+  function classifyLogLine(line) {
+    if (line.includes('rejecting request (429)')) return 'deny';
+    if (line.includes('access_log: access')) return 'access';
+    if (line.startsWith('[dashboard]')) return 'meta';
+    return '';
+  }
+
+  function formatGatewayLogLine(raw) {
+    const time = (raw.match(/T(\d{2}:\d{2}:\d{2})\.\d+Z/) || [])[1] || '';
+    if (raw.includes('token_rate_limit: rejecting request')) {
+      const key = (raw.match(/key="([^"]+)"/) || [])[1] || '?';
+      const rule = (raw.match(/rule="([^"]+)"/) || [])[1] || '?';
+      const estimate = (raw.match(/estimate=(\d+)/) || [])[1] || '?';
+      return `${time}  DENY 429  app=${key}  rule=${rule}  estimate=${estimate}`;
+    }
+    if (raw.includes('access_log: access')) {
+      const status = (raw.match(/\sstatus=(\d+)/) || [])[1] || '?';
+      const durationMs = (raw.match(/duration_ms=(\d+)/) || [])[1] || '?';
+      const ip = (raw.match(/client_ip=(\S+)/) || [])[1] || '?';
+      const app = ipToApp[ip] || ip;
+      const verb = status === '200' ? 'ADMIT' : status;
+      return `${time}  ${verb} ${status}  ${durationMs}ms  from=${app}`;
+    }
+    return raw; // startup/bootstrap lines and [dashboard] meta lines -- shown as-is, already short
+  }
+
+  function startGatewayLogStream(gw, bodyId, podId) {
+    const es = new EventSource(`/apps/app-a/gw-logs?gw=${gw}`);
+    const body = document.getElementById(bodyId);
+    es.onmessage = e => {
+      if (e.data.startsWith('[dashboard] streaming real stdout from pod ')) {
+        const podName = e.data.replace('[dashboard] streaming real stdout from pod ', '').split(' ')[0];
+        const podEl = document.getElementById(podId);
+        podEl.textContent = podName;
+        podEl.classList.remove('pending');
+      }
+      const div = document.createElement('div');
+      div.className = 'line ' + classifyLogLine(e.data);
+      div.textContent = formatGatewayLogLine(e.data);
+      div.title = e.data; // full untruncated real line on hover -- nothing is dropped, only reformatted
+      body.appendChild(div);
+      while (body.children.length > 150) body.removeChild(body.firstChild);
+      body.scrollTop = body.scrollHeight;
+    };
+  }
+
   document.getElementById('run-scenario').addEventListener('click', runScenario);
   startAnimating();
+  // ipToApp (populated by loadIdentities) must be ready *before* the gateway
+  // log streams open, or the earliest lines -- often the ones visible
+  // longest in the panel -- render with raw pod IPs instead of app names.
+  loadIdentities().then(() => {
+    startGatewayLogStream('a', 'gwlog-a', 'gwlog-pod-a');
+    startGatewayLogStream('b', 'gwlog-b', 'gwlog-pod-b');
+  });
 </script>
 </body>
 </html>
