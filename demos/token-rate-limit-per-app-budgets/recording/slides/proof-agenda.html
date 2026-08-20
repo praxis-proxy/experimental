@@ -24,22 +24,23 @@
 </style>
 </head>
 <body>
-  <h1>Per-app token budgets, shared across gateway replicas</h1>
-  <p class="lede">What this demo proves — a scoped MVP slice of ai#658, exercised on a two-instance stack.</p>
+  <h1>Per-app token budgets, mixed algorithms, shared across gateway replicas</h1>
+  <p class="lede">What this demo proves — a scoped MVP slice of ai#658/ai#789, exercised on a two-instance stack.</p>
 
   <div class="flow">
-    <div class="node">Gateway A<br /><small>token_rate_limit</small></div>
+    <div class="node">Gateway A<br /><small>token_rate_limit: gold-tier (sliding_window) + silver-tier (token_bucket)</small></div>
     <div class="arrow">&#8596;</div>
-    <div class="node ledger">Shared Valkey ledger<br /><small>one budget per x-app-id</small></div>
+    <div class="node ledger">Shared Valkey ledger<br /><small>one budget per x-app-id, per rule</small></div>
     <div class="arrow">&#8596;</div>
-    <div class="node">Gateway B<br /><small>token_rate_limit</small></div>
+    <div class="node">Gateway B<br /><small>token_rate_limit: gold-tier (sliding_window) + silver-tier (token_bucket)</small></div>
   </div>
 
   <ol>
-    <li><b>Cross-instance enforcement:</b> app-a's budget, exhausted on Gateway A, is denied on Gateway B too.</li>
-    <li><b>Per-app isolation:</b> app-b's and app-c's budgets are untouched by app-a's exhaustion.</li>
-    <li><b>Reservation-based admission:</b> each admitted request reserves its estimated cost up front, atomically, via the shared ledger.</li>
-    <li><b>Automatic window recovery:</b> app-a's budget recovers on its own once its reservation ages out of the sliding window &mdash; no manual reset.</li>
+    <li><b>Per-rule algorithm choice:</b> app-a/app-c match gold-tier (sliding_window); app-b matches silver-tier (token_bucket) &mdash; same filter, two algorithms, chosen per rule.</li>
+    <li><b>Cross-instance enforcement, both algorithms:</b> app-a's sliding-window budget and app-b's token-bucket budget, each exhausted on Gateway A, are denied on Gateway B too.</li>
+    <li><b>Per-app isolation:</b> app-c's budget is untouched by app-a's exhaustion, even under the same algorithm and rule.</li>
+    <li><b>Reservation-based admission:</b> each admitted request reserves its estimated cost up front, atomically, via the shared ledger, for either algorithm.</li>
+    <li><b>Automatic recovery, two different mechanisms:</b> app-a's budget recovers once its reservation ages out of the sliding window; app-b's recovers as its bucket refills continuously &mdash; no manual reset for either.</li>
   </ol>
 
   <small>Scope: two gateway replicas, one Valkey instance, no Grid, no multi-cluster routing, no authentication. See the demo README for what's explicitly out of scope.</small>

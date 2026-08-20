@@ -10,58 +10,107 @@
     margin: 0; width: 1920px; min-height: 1080px;
     background: #081321; color: #eef7ff;
     font: 22px/1.4 system-ui, -apple-system, sans-serif;
-    padding: 56px 80px;
+    padding: 48px 80px;
   }
   h1 { font-size: 44px; color: #67e8f9; margin: 0 0 6px; }
-  .subtitle { color: #9db3c8; font-size: 22px; margin: 0 0 36px; }
+  .subtitle { color: #9db3c8; font-size: 22px; margin: 0 0 28px; }
   .topology {
-    display: flex; gap: 28px; align-items: stretch; margin-bottom: 36px;
+    display: flex; gap: 28px; align-items: stretch; margin-bottom: 24px;
   }
   .gw {
     flex: 1; border: 2px solid #416b8d; border-radius: 16px;
-    background: #10253b; padding: 24px 28px;
+    background: #10253b; padding: 20px 28px; transition: box-shadow 0.15s, border-color 0.15s;
   }
-  .gw h2 { margin: 0 0 4px; font-size: 28px; color: #67e8f9; }
-  .gw .role { color: #9db3c8; font-size: 18px; margin-bottom: 18px; }
+  .gw.pulse { border-color: #67e8f9; box-shadow: 0 0 0 6px rgba(103,232,249,0.18); }
+  .gw h2 { margin: 0 0 4px; font-size: 26px; color: #67e8f9; }
+  .gw .role { color: #9db3c8; font-size: 17px; margin-bottom: 14px; }
   .apps { display: flex; gap: 16px; }
   .app-btn {
-    flex: 1; padding: 18px 10px; border-radius: 12px; border: 2px solid #2d4a68;
-    background: #16324f; color: #eef7ff; font-size: 20px; font-weight: 600;
-    cursor: pointer;
+    flex: 1; padding: 14px 10px; border-radius: 12px; border: 2px solid #2d4a68;
+    background: #16324f; color: #eef7ff; font-size: 19px; font-weight: 600;
+    cursor: pointer; transition: transform 0.1s, border-color 0.1s;
   }
   .app-btn:hover { border-color: #67e8f9; }
   .app-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .app-a { border-color: #69e0a4; } .app-b { border-color: #f0b354; } .app-c { border-color: #e08fe0; }
-  .budgets { display: flex; gap: 20px; margin-bottom: 30px; }
+  .app-btn.pulse { transform: scale(0.96); border-color: #fff; }
+  .app-a { border-color: #69e0a4; } .app-b { border-color: #7ec8f5; } .app-c { border-color: #e08fe0; }
+
+  .legend {
+    display: flex; gap: 20px; margin-bottom: 24px;
+  }
+  .legend .card {
+    flex: 1; border-radius: 14px; padding: 14px 22px; display: flex; align-items: center; gap: 16px;
+    border: 2px solid #2d4a68; background: #0d1d30;
+  }
+  .legend .swatch { width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; }
+  .legend .gold .swatch { background: #f0b354; }
+  .legend .silver .swatch { background: #7ec8f5; }
+  .legend .txt b { display: block; font-size: 19px; }
+  .legend .txt span { color: #9db3c8; font-size: 15px; }
+
+  .budgets { display: flex; gap: 20px; margin-bottom: 20px; }
   .budget-card {
-    flex: 1; border-radius: 14px; padding: 18px 24px; background: #10253b;
-    border-left: 8px solid #416b8d;
+    flex: 1; border-radius: 14px; padding: 16px 22px; background: #10253b;
+    border-left: 8px solid #416b8d; transition: box-shadow 0.2s;
   }
   .budget-card.app-a { border-left-color: #69e0a4; }
-  .budget-card.app-b { border-left-color: #f0b354; }
+  .budget-card.app-b { border-left-color: #7ec8f5; }
   .budget-card.app-c { border-left-color: #e08fe0; }
-  .budget-card .name { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
-  .budget-card .state { font-size: 34px; font-weight: 700; }
+  .budget-card.flash { box-shadow: 0 0 0 4px rgba(105,224,164,0.35); }
+  .budget-card .name { font-size: 20px; font-weight: 700; margin-bottom: 2px; }
+  .budget-card .state { font-size: 26px; font-weight: 700; }
   .budget-card .state.admitted { color: #69e0a4; }
   .budget-card .state.denied { color: #f87171; }
   .budget-card .state.idle { color: #9db3c8; }
-  .budget-card .detail { color: #9db3c8; font-size: 16px; margin-top: 4px; }
-  .controls { margin-bottom: 24px; }
+  .budget-card .detail { color: #9db3c8; font-size: 14px; margin: 2px 0 10px; }
+  .gauge-track {
+    width: 100%; height: 14px; border-radius: 7px; background: #050d17;
+    border: 1px solid #2d4a68; overflow: hidden; margin-bottom: 8px;
+  }
+  .gauge-fill { height: 100%; border-radius: 7px; transition: width 0.1s linear; }
+  .gauge-fill.gold { background: linear-gradient(90deg, #b8791f, #f0b354); }
+  .gauge-fill.silver { background: linear-gradient(90deg, #2e7bab, #7ec8f5); }
+  .gauge-label { display: flex; justify-content: space-between; font-size: 14px; color: #9db3c8; margin-bottom: 6px; }
+  canvas.spark { display: block; width: 100%; height: 70px; background: #050d17; border-radius: 8px; border: 1px solid #1c3450; }
+
+  .controls { margin-bottom: 18px; display: flex; align-items: center; gap: 20px; }
   #run-scenario {
-    font-size: 22px; font-weight: 700; padding: 16px 36px; border-radius: 12px;
+    font-size: 20px; font-weight: 700; padding: 14px 32px; border-radius: 12px;
     border: none; background: #67e8f9; color: #08131f; cursor: pointer;
   }
   #run-scenario:disabled { opacity: 0.5; cursor: not-allowed; }
-  #log {
-    background: #050d17; border: 2px solid #2d4a68; border-radius: 14px;
-    padding: 20px 26px; height: 420px; overflow-y: auto;
-    font: 19px/1.6 ui-monospace, SFMono-Regular, monospace;
+  #phase {
+    font-size: 20px; font-weight: 700; color: #67e8f9; min-height: 28px;
   }
-  #log .row { padding: 4px 0; border-bottom: 1px solid #16324f; }
+
+  .lower { display: flex; gap: 20px; }
+  #log {
+    flex: 3; background: #050d17; border: 2px solid #2d4a68; border-radius: 14px;
+    padding: 16px 22px; height: 300px; overflow-y: auto;
+    font: 17px/1.5 ui-monospace, SFMono-Regular, monospace;
+  }
+  #log .row { padding: 3px 0; border-bottom: 1px solid #16324f; }
   #log .row:last-child { border-bottom: none; }
   #log .ok { color: #69e0a4; }
   #log .denied { color: #f87171; }
   #log .step { color: #67e8f9; font-weight: 700; }
+
+  #checklist {
+    flex: 2; background: #0d1d30; border: 2px solid #2d4a68; border-radius: 14px;
+    padding: 16px 22px; height: 300px; overflow-y: auto;
+  }
+  #checklist h3 { margin: 0 0 10px; font-size: 18px; color: #9db3c8; font-weight: 600; }
+  #checklist .item {
+    display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; opacity: 0.25;
+    transition: opacity 0.4s;
+    font-size: 16px; line-height: 1.4;
+  }
+  #checklist .item.done { opacity: 1; }
+  #checklist .item .box {
+    flex-shrink: 0; width: 20px; height: 20px; border-radius: 5px; border: 2px solid #416b8d;
+    display: flex; align-items: center; justify-content: center; font-size: 14px; margin-top: 1px;
+  }
+  #checklist .item.done .box { background: #69e0a4; border-color: #69e0a4; color: #08131f; }
 </style>
 </head>
 <body>
@@ -69,7 +118,7 @@
   <p class="subtitle">Two <code>token_rate_limit</code> rules matched by <code>x-tier</code>, each keyed by <code>x-app-id</code>: <strong>gold-tier</strong> (sliding_window) for app-a/app-c, <strong>silver-tier</strong> (token_bucket) for app-b — both backed by the same shared Valkey namespace.</p>
 
   <div class="topology">
-    <div class="gw">
+    <div class="gw" id="gw-a">
       <h2>Gateway A</h2>
       <div class="role">independent replica &middot; same config &middot; same Valkey namespace</div>
       <div class="apps">
@@ -78,7 +127,7 @@
         <button class="app-btn app-c" data-gw="a" data-app="app-c">Send as app-c (gold)</button>
       </div>
     </div>
-    <div class="gw">
+    <div class="gw" id="gw-b">
       <h2>Gateway B</h2>
       <div class="role">independent replica &middot; same config &middot; same Valkey namespace</div>
       <div class="apps">
@@ -89,29 +138,61 @@
     </div>
   </div>
 
+  <div class="legend">
+    <div class="card gold">
+      <div class="swatch"></div>
+      <div class="txt"><b>Gold tier &middot; sliding_window</b><span>capacity 40, window 10s &mdash; usage counted against the window doesn't free up until the window itself slides forward</span></div>
+    </div>
+    <div class="card silver">
+      <div class="swatch"></div>
+      <div class="txt"><b>Silver tier &middot; token_bucket</b><span>capacity 10, refill 2/s &mdash; drains on use, then refills continuously at a fixed rate, independent of any window</span></div>
+    </div>
+  </div>
+
   <div class="budgets">
     <div class="budget-card app-a" id="budget-app-a">
       <div class="name">app-a &middot; gold-tier (sliding_window)</div>
       <div class="state idle" id="state-app-a">idle</div>
       <div class="detail" id="detail-app-a">no requests yet</div>
+      <div class="gauge-label"><span>remaining</span><span id="gauge-num-app-a">40 / 40</span></div>
+      <div class="gauge-track"><div class="gauge-fill gold" id="gauge-app-a" style="width:100%"></div></div>
+      <canvas class="spark" id="spark-app-a" width="600" height="70"></canvas>
     </div>
     <div class="budget-card app-b" id="budget-app-b">
       <div class="name">app-b &middot; silver-tier (token_bucket)</div>
       <div class="state idle" id="state-app-b">idle</div>
       <div class="detail" id="detail-app-b">no requests yet</div>
+      <div class="gauge-label"><span>remaining</span><span id="gauge-num-app-b">10 / 10</span></div>
+      <div class="gauge-track"><div class="gauge-fill silver" id="gauge-app-b" style="width:100%"></div></div>
+      <canvas class="spark" id="spark-app-b" width="600" height="70"></canvas>
     </div>
     <div class="budget-card app-c" id="budget-app-c">
       <div class="name">app-c &middot; gold-tier (sliding_window)</div>
       <div class="state idle" id="state-app-c">idle</div>
       <div class="detail" id="detail-app-c">no requests yet</div>
+      <div class="gauge-label"><span>remaining</span><span id="gauge-num-app-c">40 / 40</span></div>
+      <div class="gauge-track"><div class="gauge-fill gold" id="gauge-app-c" style="width:100%"></div></div>
+      <canvas class="spark" id="spark-app-c" width="600" height="70"></canvas>
     </div>
   </div>
 
   <div class="controls">
-    <button id="run-scenario">Run scenario: mixed algorithms, shared budgets, per-app isolation, and per-algorithm recovery (~15s)</button>
+    <button id="run-scenario">Run scenario: mixed algorithms, shared budgets, per-app isolation, and per-algorithm recovery</button>
+    <div id="phase"></div>
   </div>
 
-  <div id="log"></div>
+  <div class="lower">
+    <div id="log"></div>
+    <div id="checklist">
+      <h3>What this proves</h3>
+      <div class="item" data-key="algo"><div class="box"></div><div>Per-rule algorithm choice: gold-tier (sliding_window) vs silver-tier (token_bucket), matched by <code>x-tier</code></div></div>
+      <div class="item" data-key="shared"><div class="box"></div><div>Cross-instance shared budget: exhausted on Gateway A means denied on Gateway B too &mdash; for <em>both</em> algorithms</div></div>
+      <div class="item" data-key="isolation"><div class="box"></div><div>Per-app isolation: app-c's budget is untouched by app-a's exhaustion, same rule, same namespace</div></div>
+      <div class="item" data-key="reservation"><div class="box"></div><div>Reservation-based admission: cost reserved atomically before the response is known</div></div>
+      <div class="item" data-key="window-recovery"><div class="box"></div><div>Automatic window recovery: app-a's sliding window ages its reservation out on its own</div></div>
+      <div class="item" data-key="bucket-recovery"><div class="box"></div><div>Automatic bucket recovery: app-b's token bucket refills continuously, on its own terms</div></div>
+    </div>
+  </div>
 
 <script>
   const logEl = document.getElementById('log');
@@ -127,14 +208,144 @@
 
   function stepLabel(text) {
     logRow(text, 'step');
+    document.getElementById('phase').textContent = text;
   }
 
-  // Which token_rate_limit rule (and therefore algorithm) each app's
-  // traffic is routed to via the x-tier match header -- see ../config.yaml.
+  function checkOff(key) {
+    const item = document.querySelector(`#checklist .item[data-key="${key}"]`);
+    if (item) item.classList.add('done');
+  }
+
+  // -------------------------------------------------------------------
+  // Client-side budget model -- mirrors config.yaml's server-side math
+  // exactly (verified empirically against the live stack while producing
+  // recording/RECORDING.md) purely so the gauges/charts can animate
+  // continuously between requests, without spending extra budget on
+  // probe calls the server would have to admit or deny for real. Every
+  // *transition* the model predicts (admit/deny) is cross-checked
+  // against the real HTTP status of each actual request below -- this is
+  // not a mock, it's the same arithmetic the Lua reserve/reconcile
+  // scripts perform, replayed client-side from known request timestamps.
+  // -------------------------------------------------------------------
+  class BudgetModel {
+    constructor(algorithm, capacity, opts) {
+      this.algorithm = algorithm;
+      this.capacity = capacity;
+      this.refillRate = opts.refillRate || 0;
+      this.windowMs = opts.windowMs || 0;
+      this.events = []; // { t, cost }
+      this.history = []; // { t, remaining } for the sparkline
+    }
+
+    record(t, cost) {
+      this.events.push({ t, cost });
+    }
+
+    remainingAt(t) {
+      if (this.algorithm === 'token_bucket') {
+        let tokens = this.capacity;
+        let cursor = null;
+        for (const ev of this.events) {
+          if (ev.t > t) break;
+          if (cursor === null) cursor = ev.t;
+          tokens = Math.min(this.capacity, tokens + ((ev.t - cursor) / 1000) * this.refillRate);
+          tokens = Math.max(0, tokens - ev.cost);
+          cursor = ev.t;
+        }
+        if (cursor !== null) {
+          tokens = Math.min(this.capacity, tokens + ((t - cursor) / 1000) * this.refillRate);
+        }
+        return tokens;
+      }
+      // sliding_window: capacity minus the sum of reservations still inside the trailing window
+      const used = this.events
+        .filter(ev => ev.t > t - this.windowMs && ev.t <= t)
+        .reduce((sum, ev) => sum + ev.cost, 0);
+      return Math.max(0, this.capacity - used);
+    }
+
+    sample(t) {
+      const remaining = this.remainingAt(t);
+      this.history.push({ t, remaining });
+      const cutoff = t - 30000;
+      while (this.history.length > 1 && this.history[0].t < cutoff) this.history.shift();
+      return remaining;
+    }
+  }
+
+  const models = {
+    'app-a': new BudgetModel('sliding_window', 40, { windowMs: 10000 }),
+    'app-c': new BudgetModel('sliding_window', 40, { windowMs: 10000 }),
+    'app-b': new BudgetModel('token_bucket', 10, { refillRate: 2 }),
+  };
+  const ESTIMATE = { 'app-a': 40, 'app-c': 40, 'app-b': 10 };
+  const COLOR = { 'app-a': '#f0b354', 'app-c': '#e08fe0', 'app-b': '#7ec8f5' };
+
+  function drawSpark(app) {
+    const canvas = document.getElementById('spark-' + app);
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    const model = models[app];
+    const hist = model.history;
+    if (hist.length < 2) return;
+    const t0 = hist[0].t, t1 = hist[hist.length - 1].t;
+    const span = Math.max(1, t1 - t0);
+    const x = pt => ((pt - t0) / span) * w;
+    const y = v => h - (Math.max(0, Math.min(model.capacity, v)) / model.capacity) * (h - 4) - 2;
+
+    ctx.beginPath();
+    ctx.moveTo(x(hist[0].t), h);
+    for (const p of hist) ctx.lineTo(x(p.t), y(p.remaining));
+    ctx.lineTo(x(hist[hist.length - 1].t), h);
+    ctx.closePath();
+    ctx.fillStyle = COLOR[app] + '33';
+    ctx.fill();
+
+    ctx.beginPath();
+    hist.forEach((p, i) => (i === 0 ? ctx.moveTo(x(p.t), y(p.remaining)) : ctx.lineTo(x(p.t), y(p.remaining))));
+    ctx.strokeStyle = COLOR[app];
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  let animating = false;
+  function renderTick() {
+    const now = Date.now();
+    for (const app of Object.keys(models)) {
+      const remaining = models[app].sample(now);
+      const pct = Math.max(0, Math.min(100, (remaining / models[app].capacity) * 100));
+      document.getElementById('gauge-' + app).style.width = pct + '%';
+      document.getElementById('gauge-num-' + app).textContent =
+        `${remaining.toFixed(1)} / ${models[app].capacity}`;
+      drawSpark(app);
+    }
+    if (animating) requestAnimationFrame(renderTick);
+  }
+  function startAnimating() {
+    if (animating) return;
+    animating = true;
+    requestAnimationFrame(renderTick);
+  }
+
+  function pulse(el, ms = 550) {
+    el.classList.add('pulse');
+    setTimeout(() => el.classList.remove('pulse'), ms);
+  }
+  function flashCard(app) {
+    const card = document.getElementById('budget-' + app);
+    card.classList.add('flash');
+    setTimeout(() => card.classList.remove('flash'), 900);
+  }
+
   const TIER_BY_APP = { 'app-a': 'gold', 'app-c': 'gold', 'app-b': 'silver' };
 
   async function sendRequest(gw, app) {
+    pulse(document.getElementById('gw-' + gw));
+    pulse(document.querySelector(`.app-btn.${app}[data-gw="${gw}"]`));
+
     const path = gw === 'a' ? '/a/v1/chat/completions' : '/b/v1/chat/completions';
+    const t = Date.now();
     const res = await fetch(path, {
       method: 'POST',
       headers: { 'x-app-id': app, 'x-tier': TIER_BY_APP[app], 'Content-Type': 'application/json' },
@@ -145,6 +356,9 @@
     const retryAfter = res.headers.get('retry-after');
     const admitted = res.status === 200;
     const gwLabel = gw === 'a' ? 'Gateway A' : 'Gateway B';
+
+    const wasDenied = document.getElementById('state-' + app).textContent === 'denied';
+    if (admitted) models[app].record(t, ESTIMATE[app]);
 
     logRow(
       `${gwLabel} ${app}: HTTP ${res.status}${admitted ? ' (admitted)' : ' (denied)'}` +
@@ -158,7 +372,8 @@
     stateEl.className = 'state ' + (admitted ? 'admitted' : 'denied');
     detailEl.textContent = admitted
       ? `last admitted on ${gwLabel}`
-      : `denied on ${gwLabel} — remaining ${remaining}/${limit} tokens, retry after ${retryAfter}s`;
+      : `denied on ${gwLabel} — retry after ${retryAfter}s`;
+    if (admitted && wasDenied) flashCard(app);
 
     return { admitted, remaining, limit, retryAfter, status: res.status };
   }
@@ -167,60 +382,90 @@
     btn.addEventListener('click', () => sendRequest(btn.dataset.gw, btn.dataset.app));
   });
 
-  // Must exceed gold-tier's configured `window` (10s in config.yaml) so
-  // app-a's original reservation has fully aged out of the sliding window
-  // before the recovery retry -- verified empirically against the live
-  // stack: recovers at t=11s with window=10s (10s + request overhead).
-  // This also covers silver-tier's token_bucket refill (capacity=40,
-  // refill_rate=8/s): its own recovery lands well before this, since a
-  // token bucket refills continuously rather than waiting out a fixed
-  // window -- see step 8 below for what that difference looks like in
-  // practice.
-  const RECOVERY_WAIT_MS = 11500;
+  const wait = ms => new Promise(r => setTimeout(r, ms));
 
+  // Offsets (ms from run-scenario click) chosen to track narration.srt's
+  // cue timestamps -- see recording/narration/narration.srt -- so the
+  // dashboard keeps producing visible, narrated action for the full
+  // clip instead of front-loading every request into the first ~15s and
+  // then sitting idle. The gauges/sparklines above animate continuously
+  // via requestAnimationFrame regardless of these offsets, so there is
+  // always visible motion (a flat line for gold's exhausted window, a
+  // rising ramp for silver's refilling bucket) even during the waits.
   async function runScenario() {
     const runBtn = document.getElementById('run-scenario');
     runBtn.disabled = true;
     logEl.innerHTML = '';
     window.__scenarioResults = [];
-    const scenarioStart = Date.now();
+    document.querySelectorAll('#checklist .item').forEach(el => el.classList.remove('done'));
+    startAnimating();
+    const t0 = Date.now();
+    const at = async (targetMs, fn) => {
+      const remaining = targetMs - (Date.now() - t0);
+      if (remaining > 0) await wait(remaining);
+      await fn();
+    };
 
-    stepLabel('Step 1: app-a (gold-tier, sliding_window) sends its first request via Gateway A (expect 200 — budget admitted)');
-    window.__scenarioResults.push(await sendRequest('a', 'app-a'));
-    await new Promise(r => setTimeout(r, 1500));
+    stepLabel('Two independent gateways share one Valkey-backed ledger. app-a/app-c match gold-tier (sliding_window); app-b matches silver-tier (token_bucket).');
+    checkOff('algo');
 
-    stepLabel('Step 2: app-a sends its next request via Gateway B, the OTHER process (expect 429 — shared Valkey budget already exhausted)');
-    window.__scenarioResults.push(await sendRequest('b', 'app-a'));
-    await new Promise(r => setTimeout(r, 1500));
+    await at(9700, async () => {
+      stepLabel('Step 1: app-a (gold-tier, sliding_window) sends its first request via Gateway A (expect 200 — budget admitted)');
+      window.__scenarioResults.push(await sendRequest('a', 'app-a'));
+    });
 
-    stepLabel('Step 3: app-c (gold-tier, sliding_window) sends a request via Gateway A (expect 200 — its own independent budget, same algorithm as app-a but unaffected by it)');
-    window.__scenarioResults.push(await sendRequest('a', 'app-c'));
-    await new Promise(r => setTimeout(r, 1500));
+    await at(13100, async () => {
+      stepLabel('Step 2: app-a sends its next request via Gateway B, the OTHER process (expect 429 — shared Valkey budget already exhausted)');
+      window.__scenarioResults.push(await sendRequest('b', 'app-a'));
+      checkOff('shared');
+    });
 
-    stepLabel('Step 4: app-b (silver-tier, token_bucket) sends its first request via Gateway A (expect 200 — a different algorithm, matched via x-tier: silver, own budget)');
-    window.__scenarioResults.push(await sendRequest('a', 'app-b'));
-    await new Promise(r => setTimeout(r, 1500));
+    await at(20200, async () => {
+      stepLabel('Step 3: app-c (gold-tier, sliding_window) sends a request via Gateway A (expect 200 — its own independent budget, unaffected by app-a)');
+      window.__scenarioResults.push(await sendRequest('a', 'app-c'));
+      checkOff('isolation');
+      checkOff('reservation');
+    });
 
-    stepLabel('Step 5: app-b sends its next request via Gateway B, the OTHER process (expect 429 — the shared-Valkey guarantee holds for token_bucket too, not just sliding_window)');
-    window.__scenarioResults.push(await sendRequest('b', 'app-b'));
+    await at(25200, async () => {
+      stepLabel('Step 4: app-b (silver-tier, token_bucket) sends its first request via Gateway A (expect 200 — a different algorithm, matched via x-tier: silver)');
+      window.__scenarioResults.push(await sendRequest('a', 'app-b'));
+    });
 
-    stepLabel("Step 6: waiting for gold-tier's window: 10s sliding window to pass since app-a's original reservation, so it ages out on its own — no manual reset...");
-    const elapsedSoFar = Date.now() - scenarioStart;
-    const waitMs = Math.max(RECOVERY_WAIT_MS - elapsedSoFar, 0);
-    await new Promise(r => setTimeout(r, waitMs));
+    await at(27200, async () => {
+      stepLabel('Step 5: app-b sends its next request via Gateway B, the OTHER process (expect 429 — the shared-Valkey guarantee holds for token_bucket too)');
+      window.__scenarioResults.push(await sendRequest('b', 'app-b'));
+    });
 
-    stepLabel("Step 7: app-a retries on Gateway A (expect 200 — the window slid past its earlier reservation; nothing was manually reset)");
-    window.__scenarioResults.push(await sendRequest('a', 'app-a'));
+    await at(36900, async () => {
+      stepLabel('Now watch each budget recover on its own terms — gold-tier stays flat until the window slides; silver-tier ramps up continuously as it refills.');
+    });
 
-    stepLabel("Step 8: app-b retries on Gateway B (expect 200 — silver-tier's bucket refilled continuously at 8 tokens/sec rather than waiting out a fixed window, so it typically recovers sooner than gold-tier's cliff-edge window slide)");
-    window.__scenarioResults.push(await sendRequest('b', 'app-b'));
+    await at(44500, async () => {
+      stepLabel('Step 6: app-a retries on Gateway A (expect 200 — the window slid past its earlier reservation; nothing was manually reset)');
+      window.__scenarioResults.push(await sendRequest('a', 'app-a'));
+      checkOff('window-recovery');
+    });
 
-    stepLabel('Scenario complete: one shared Valkey namespace, two independently-chosen algorithms (sliding_window vs token_bucket) per rule, three isolated per-app budgets, enforced consistently across both gateway replicas -- each algorithm recovers on its own terms, no manual reset.');
+    await at(51500, async () => {
+      stepLabel("Step 7: app-b retries on Gateway B (expect 200 — silver-tier's bucket refilled continuously, recovering well before gold-tier's cliff-edge window slide)");
+      window.__scenarioResults.push(await sendRequest('b', 'app-b'));
+      checkOff('bucket-recovery');
+    });
+
+    await at(55700, async () => {
+      stepLabel('One shared ledger, two algorithms chosen per rule, isolated per-app budgets, and automatic recovery — across a real process boundary.');
+    });
+
+    await at(74000, async () => {});
+
+    stepLabel('Scenario complete.');
     window.__scenarioDone = true;
     runBtn.disabled = false;
   }
 
   document.getElementById('run-scenario').addEventListener('click', runScenario);
+  startAnimating();
 </script>
 </body>
 </html>

@@ -7,7 +7,15 @@ scenes:
   - { id: agenda, kind: slide, source: slides/proof-agenda.html, narration: narration/narration.txt }
   - { id: live-scenario, kind: browser, script: playwright/record.mjs, narration: narration/narration.txt }
 evidence:
-  required: [cross_instance_shared_budget, per_app_isolation, reservation_admission, window_recovery]
+  required:
+    [
+      per_rule_algorithm_choice,
+      cross_instance_shared_budget,
+      per_app_isolation,
+      reservation_admission,
+      window_recovery,
+      token_bucket_recovery,
+    ]
 redaction:
   deny:
     - odin
