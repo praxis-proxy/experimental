@@ -11,14 +11,73 @@ screen capture. This recording covers the **mixed-algorithm** scenario:
 `gold-tier` (`sliding_window`) and `silver-tier` (`token_bucket`), matched by
 an `x-tier` header, per ai#789/praxis#551.
 
-**Watch:** `output/mixed-algorithms-token-rate-limit.mp4` (1920x1080,
-h264/aac, ~79s)
+**Watch:** `output/k8s-real-pods-token-rate-limit.mp4` (1920x1080, h264/aac,
+~143s)
+
+`dashboard/index.html` uses a generic (unbranded) dark theme, deliberately
+kept free of any company branding since this repo is meant for
+community/contributor adoption. A Red Hat-branded skin variant (dark theme
+using Red Hat's own brand palette/type, per
+redhat.com/en/about/brand/standards) was also produced and recorded/
+validated identically to this one, for the team to decide separately
+whether a branded variant belongs in this demo at all; it is intentionally
+not part of this PR.
 
 An earlier, single-algorithm (`sliding_window`-only) recording of this same
 demo existed before the mixed-algorithm scenario landed; it has been
 superseded and removed since it no longer matches the current
 `config.yaml`/`dashboard/` (which only support the two-rule, `x-tier`-matched
 scenario).
+
+## Update: real Kubernetes deployment, retuned token values, live cluster topology
+
+The stack now runs on a real `kind` Kubernetes cluster (`k8s/`, `deploy.sh`)
+instead of `docker-compose.yml` for recording purposes (the compose file is
+kept in sync and still works for the `curl` walkthrough in `../README.md`,
+but the video itself is produced against the K8s deployment). This
+addressed feedback that the previous recording "read like a fake video":
+
+- **Real pod identities everywhere**, not placeholder names: every
+  `budget-card`, gateway-log panel, and the new namespace/pod-status strip
+  at the top of the dashboard shows actual `metadata.name` pod names
+  resolved live via the Kubernetes API (see `k8s/00-namespace-rbac.yaml`'s
+  RBAC grant and `k8s/04-apps.yaml`'s `/whoami`, `/gateway-pod`, and
+  `/cluster-pods` endpoints) -- app-a/b/c keep their role labels as the
+  primary identifier (they're the real `x-app-id` rate-limit key), but the
+  pod name shown alongside each is the literal, currently-scheduled pod.
+- **Live gateway stdout**, streamed via Server-Sent Events from the
+  Kubernetes `pods/log` subresource (`k8s/04-apps.yaml`'s `/gw-logs`
+  endpoint), client-side reformatted for legibility and with `client_ip`
+  resolved back to an app name via each app's Downward-API `pod_ip`.
+- **Retuned `estimate_tokens`** for more visible traffic: `gold-tier`
+  15/40 (was 40/40) and `silver-tier` 7/10 (was 10/10), so a single
+  request no longer exhausts either budget outright -- see
+  `../config.yaml`'s comment and `../README.md`'s "Validate the request
+  flow" for the exact admit/deny/recover math this produces, and why
+  `estimate_tokens` must still exactly match the stub backend's (now
+  tier-aware, see `k8s/02-backend.yaml`) reported `usage.total_tokens`.
+  The scenario grew from 7 to 8 requests: gold-tier now shows a genuine
+  3-request burst (admit, admit, deny) instead of a 1-request cliff-edge,
+  and silver-tier's recovery is demonstrably much faster (a couple of
+  seconds) than gold-tier's (the full 10s window).
+- **A live namespace/pod-status strip** (`#cluster-strip` in
+  `dashboard/index.html`) shows every pod in the `trl-demo` namespace --
+  not just the ones each card already links to -- fetched from the real
+  Kubernetes API and polled every 5s, as the single strongest "this isn't
+  a mock" signal available (the entire namespace's actual live state, not
+  a curated subset).
+
+All narration/timing (`narration/narration.txt`, `.srt`) and
+`playwright/record.mjs`'s `requireGate` assertions were updated to match
+the new 8-request scenario; see their headers/comments for specifics. The
+"Seven live HTTP assertions" and per-algorithm numeric details in the
+sections below describe the *original* mixed-algorithm recording's
+original `capacity: 40, estimate_tokens: 40` / `capacity: 10,
+estimate_tokens: 10` numbers -- they are not the current `estimate_tokens`
+values (see this section and `../config.yaml` for those), and the
+"reconciliation asymmetry" language they and the following section
+originally used has since been corrected (see "Correction" section below).
+The scenario is now 8 requests, not 7.
 
 ## Dashboard v2: live per-app gauges/charts + narration-paced timeline
 
@@ -64,7 +123,7 @@ but visually inert for most of the clip, and it gave viewers no way to see
   2.0s (4/10 tokens refilled at that point, comfortably below the 10
   needed for admission).
 
-```
+```text
 $ curl replay of the new offsets, live stack, before re-recording:
 t=9732ms   app-a@a (gold)   -> 200   (admitted)
 t=13166ms  app-a@b (gold)   -> 429   (denied, cross-instance)
@@ -135,42 +194,37 @@ was scoped instead to `per_rule_algorithm_choice`,
 `window_recovery`, and `token_bucket_recovery` -- matched 1:1 to the
 `requireGate` assertions above.
 
-## A finding this recording surfaced: the two algorithms reconcile differently
+## Correction: an earlier version of this doc claimed a false algorithm asymmetry
 
-Both rules use reservation-based admission (reserve an `estimate_tokens`
-cost up front, reconcile against the stub backend's actual
-`usage.total_tokens: 10` once the response is known -- see
-`../README.md`'s "Validate the request flow"). While tuning this recording's
-parameters, reconciliation turned out to behave differently per algorithm,
-not just per the design docs:
+An earlier pass of this recording's tuning notes claimed that
+`token_bucket` credits an estimate/actual refund back into its balance
+while `sliding_window` does not retroactively shrink what's counted
+against its window -- framed as a genuine, previously-undocumented
+asymmetry between the two algorithms. **That claim was wrong** and has
+been removed from this doc, `../README.md`, `../config.yaml`, and
+`evidence-manifest.json`. Re-reading the source branch's actual reconcile
+implementations (`token_rate_limit::ledger::Ledger::reconcile` and
+`token_rate_limit::token_bucket_ledger::TokenBucketLedger::reconcile`)
+shows both apply the identical `estimate`-vs-`actual` delta: `sliding_window`
+records the *settled* usage entry at the actual token count (not the
+estimate), and since window usage is summed fresh from settled + active
+entries on every call, an overestimate genuinely does shrink what's counted
+against the window -- there is a dedicated passing unit test for exactly
+this,
+`reconcile_releases_unused_tokens_on_overestimate` (`filters/src/token_rate_limit/tests.rs`).
+Both algorithms reconcile symmetrically as currently implemented.
 
-- **`token_bucket` (`silver-tier`) credits any estimate/actual gap straight
-  back into the bucket.** With the tempting choice of `capacity: 40,
-  estimate_tokens: 40` (matching `gold-tier`'s numbers, and the values
-  originally used before this was discovered), the first reservation
-  reserves 40, the response settles at the stub's real usage of 10, and the
-  unused 30 is refunded back into the bucket -- once the background
-  reconcile worker processes it (asynchronous, not on the response's own
-  request path). In practice that refund plus a small amount of continuous
-  refill is often enough to admit a *second* request well before any
-  "real" capacity has been exhausted, which defeats the demo's own premise.
-  Fixed here by setting `silver-tier`'s `estimate_tokens`/`capacity` to `10`
-  -- equal to the stub's fixed real usage -- so the refund is always ~0 and
-  exhaustion is deterministic regardless of when the async worker runs.
-- **`sliding_window` (`gold-tier`) does not do this.** With
-  `capacity: 40, estimate_tokens: 40`, the same 30-token refund happens
-  (the reconcile math is shared), but it does not retroactively shrink the
-  amount already counted against the trailing window -- the window tracks
-  reservations against the estimate at admission time, not a "live"
-  spendable balance the way a bucket does. That's why the original
-  (single-algorithm) recording's `capacity: 40, estimate_tokens: 40` numbers
-  worked correctly for `sliding_window` and needed no change here.
-
-This is a real, previously-undocumented asymmetry between the two
-algorithms' reservation/reconciliation semantics, not a demo-only artifact
--- see `../README.md`'s "Open design questions" for the follow-up this
-raises upstream (should both algorithms free reconciled-away capacity
-immediately, or should neither?).
+What actually needed fixing, and what the retuning above was really about:
+this demo's stub backend originally reported a single **fixed**
+`usage.total_tokens` value regardless of which tier's request it was
+serving, which could mismatch whatever `estimate_tokens` a tier configured
+-- a demo-configuration bug, not an algorithm-level design difference. It's
+now fixed by making the stub backend tier-aware (see `../k8s/02-backend.yaml`
+and `../docker-compose.yml`), so `estimate_tokens` always matches
+`usage.total_tokens` exactly for both tiers and reconciliation's refund/
+overage math nets to ~0 either way. There is no known open design question
+here upstream; this section previously implied one that doesn't hold up
+against the actual code.
 
 ## What "window recovery" and "bucket recovery" mean, and what they don't
 
@@ -300,7 +354,10 @@ the video was asserted live against the real stack, not staged, and the
 final media passed the toolkit's own validation gate. The flagged
 deviations (local TTS, approximate captions, the lab-host ffmpeg/SELinux
 workarounds) are cosmetic/environment-layer, not evidentiary -- they don't
-affect what was actually proven about the filter's behavior. The
-reconciliation-asymmetry finding above is a genuine discovery from tuning
-this recording against the live stack, not a guess -- it's now called out
-explicitly for upstream review rather than silently worked around.
+affect what was actually proven about the filter's behavior. An earlier
+pass of this doc also claimed a "reconciliation asymmetry" between the two
+algorithms as a finding from tuning this recording; that claim did not hold
+up against the source branch's actual reconcile code and tests, and has
+been corrected above -- flagged here as a reminder that this doc's own
+design-adjacent claims (as opposed to the live HTTP assertions) need the
+same evidentiary bar, not just plausibility.
