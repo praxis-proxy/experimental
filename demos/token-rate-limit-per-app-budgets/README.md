@@ -174,6 +174,44 @@ Both gateways load the exact same `config.yaml` (two rules, one per
 algorithm); the only thing that makes their budgets *shared* rather
 than *independent* is pointing both at the same Valkey `namespace`.
 
+## Run on Kubernetes (kind)
+
+The recorded walkthrough above ran this same stack on a real `kind`
+cluster instead of `docker compose` -- every pod name, gateway log
+line, and per-request HTTP call in the video is real. `k8s/deploy.sh`
+reproduces that deployment. You'll additionally need `kind` and
+`kubectl` installed.
+
+```bash
+# 1. Build the gateway image from the source branch checked out above.
+cd ../../../praxis-ai-trl-demo
+podman build -t docker.io/library/praxis-ai-trl-demo:local -f Containerfile .
+
+# 2. Create a kind cluster and load the image into it -- k8s/03-gateways.yaml
+#    sets imagePullPolicy: Never, so the image must already be on the node
+#    rather than pulled from a registry.
+KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster --name trl-demo
+podman save docker.io/library/praxis-ai-trl-demo:local -o /tmp/praxis-ai-trl-demo.tar
+KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive \
+  /tmp/praxis-ai-trl-demo.tar --name trl-demo
+
+# 3. Deploy the namespace, Valkey, backend, both gateways, three apps, and
+#    the dashboard, and wait for every pod to be ready.
+cd ../experimental/demos/token-rate-limit-per-app-budgets
+./k8s/deploy.sh
+
+# 4. Port-forward the same ports "Validate the request flow" and the
+#    dashboard use below, so those curl commands work unmodified.
+kubectl -n trl-demo port-forward svc/gateway-a 8080:8080 &
+kubectl -n trl-demo port-forward svc/gateway-b 8081:8080 &
+kubectl -n trl-demo port-forward svc/dashboard 3000:3000 &
+```
+
+Docker users can drop `KIND_EXPERIMENTAL_PROVIDER=podman` and swap in
+`docker save`/`docker load` for the equivalent `podman` commands. Tear
+down with `KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name
+trl-demo` when done.
+
 ## Validate the request flow
 
 `gold-tier` (`sliding_window`) uses `capacity: 40` tokens,
