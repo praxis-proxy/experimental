@@ -1,0 +1,62 @@
+# switchyard_route demo topology (rendered by run-demo.sh; see the sibling
+# README.md and docs/switchyard-route.md).
+#
+# gateway 127.0.0.1:18080
+#   └─ switchyard_route
+#        ├─ judge callout  → __JUDGE_ENDPOINT__   (a REAL OpenAI-compatible model)
+#        ├─ weak-cluster   → 127.0.0.1:18092      (local echo upstream, model qwen-mini)
+#        └─ strong-cluster → 127.0.0.1:18093      (local echo upstream, model qwen-max)
+#
+# The judge is real: the Capability classifier POSTs an OpenAI chat-completions
+# request (packaged classifier system prompt + your messages + a json_schema
+# response_format) and reads the model's verdict. The two upstreams are local
+# echo servers so the rewritten `model` field and the chosen cluster are plainly
+# visible in the demo transcript.
+
+listeners:
+  - name: switchyard-gateway
+    address: "127.0.0.1:18080"
+    filter_chains:
+      - routing
+
+filter_chains:
+  - name: routing
+    filters:
+      - filter: switchyard_route
+        judge:
+          endpoint: "__JUDGE_ENDPOINT__"
+          model: __JUDGE_MODEL__
+          # Credential for a hosted judge. The secret stays in the environment;
+          # only the variable *name* is written here. run-demo.sh drops this
+          # block entirely when JUDGE_KEY_ENV is unset (keyless local judges
+          # like vLLM/Ollama).
+__JUDGE_AUTH_BLOCK__
+          # Generous: real local judges (especially thinking models) can be
+          # slow; production judges should be small and fast (~2000 ms).
+          timeout_ms: 60000
+        threshold: 0.5
+        targets:
+          weak:
+            cluster: weak-cluster
+            model: qwen-mini
+          strong:
+            cluster: strong-cluster
+            model: qwen-max
+        session_floor:
+          enabled: true
+          ttl_secs: 3600
+          exclude_below: true
+          # Once a session is floored strong, skip the judge entirely: its
+          # verdict is already foregone. Turn 3 of the demo shows this — the
+          # floor holds strong with NO judge call (grep the server log for
+          # "escalation ratchet held"). Off by default in the filter.
+          escalation_ratchet: true
+        on_failure: open
+      - filter: load_balancer
+        clusters:
+          - name: weak-cluster
+            endpoints:
+              - "127.0.0.1:18092"
+          - name: strong-cluster
+            endpoints:
+              - "127.0.0.1:18093"

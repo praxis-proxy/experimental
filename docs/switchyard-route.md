@@ -1,0 +1,238 @@
+# `switchyard_route`: Capability-mode Mixture-of-Models routing
+
+> **Status: POC** (praxis-proxy/experimental#2, Track A item 2 of
+> praxis-proxy/ai#758, discussion praxis-proxy/praxis#976). Built against
+> NVIDIA NeMo Switchyard `=0.2.0` (pre-alpha; git tag `v0.2.0`, commit
+> `1fc9ab887d1c663b0048ae24d5f473d15ed8daaa`). Any version bump is a
+> deliberate change: re-run `make audit` and re-verify the API notes in the
+> module docs.
+
+`switchyard_route` embeds Switchyard's `LlmTaskClassifier` (Capability mode)
+in the Praxis request path as a **decision-only** router. One cheap judge
+callout classifies each request (easy vs hard); Switchyard names an abstract
+tier tag (`weak` / `strong`); the filter resolves that tag through its own
+config table into a real `(cluster, model)` pair, rewriting the request
+body's `model` field *and* selecting the Praxis cluster. The answer is served
+once, by the real upstream — the filter never serves it.
+
+Switchyard only ever sees the abstract tags. Repointing `strong` from one
+provider to another is a one-line config change; Switchyard is untouched.
+
+## How it works
+
+With `BodyMode::StreamBuffer`, the buffered-body hook runs *before*
+`on_request`:
+
+1. `on_request_body` (end of stream): parse the JSON body, detect the wire
+   format (OpenAI chat completions or Anthropic messages, by path first and
+   body shape as fallback), decode it into the Switchyard IR, and drive
+   `run_stream` until the routed `Step::Decision`. The judge `CallLlm` step
+   is served through the server-shared `SubRequestClient` against the
+   configured judge endpoint; the stream is dropped at the decision, before
+   any answer call. The chosen tier's model is written into the body in
+   place (provider-specific fields preserved — no IR round-trip), and the
+   chosen cluster is stashed in filter metadata.
+2. `on_request`: applies the stashed cluster to `ctx.cluster` (preserving a
+   cluster an earlier filter already chose).
+
+Observability metadata: `switchyard_route.cluster`, `.tier`, `.model` on
+success; `switchyard_route.error` on the failure path.
+
+## Configuration
+
+```yaml
+filter_chains:
+  - name: routing
+    filters:
+      - filter: switchyard_route
+        judge:                       # required — the classifier callout
+          endpoint: "http://judge.internal:8000/v1/chat/completions"
+          model: qwen3-judge         # model id sent to the judge
+          auth:                      # optional — omit for a keyless judge
+            value_env: OPENAI_API_KEY  # env var holding the secret (required)
+            header: authorization      # default: authorization
+            scheme: Bearer             # default: Bearer ("" sends raw value)
+          timeout_ms: 2000           # DNS + HTTP deadline (default 2000)
+          max_response_bytes: 65536  # judge reply cap (default 64 KiB)
+        threshold: 0.5               # classifier base threshold, [0,1]
+        targets:                     # required — exactly weak + strong
+          weak:
+            cluster: local-vllm      # -> ctx.cluster
+            model: qwen2.5-7b        # -> body["model"]
+          strong:
+            cluster: openai-frontier
+            model: gpt-4o
+        session_floor:               # host-owned no-downgrade ratchet
+          enabled: true              # default true
+          ttl_secs: 3600             # inactivity eviction (default 1 h)
+          exclude_below: true        # also bar weak inside Switchyard
+          escalation_ratchet: false  # skip the judge once floored strong (default false)
+        on_failure: open             # open | closed (default open)
+        max_body_bytes: 1048576      # StreamBuffer cap (default 1 MiB)
+        session_header: x-switchyard-session-id
+      - filter: load_balancer
+        clusters:
+          - name: local-vllm
+            endpoints: ["10.0.1.1:8000"]
+          - name: openai-frontier
+            endpoints: ["10.0.2.1:8443"]
+```
+
+Notes:
+
+- The failure knob is **`on_failure`**, not `failure_mode`: `failure_mode`
+  is a structural key of Praxis's pipeline `FilterEntry` wrapper and is
+  stripped before the filter sees its config.
+- There is deliberately **no `default_tier`**: on failure the filter never
+  forces a tier (see below).
+- Bodies over `max_body_bytes` are rejected with 413 by the `StreamBuffer`
+  machinery itself, before the filter runs.
+- **Judge credentials never live in config.** `judge.auth.value_env` names an
+  environment variable; the value is read once at startup (a missing or empty
+  variable fails filter construction) and sent as `<scheme> <secret>` in the
+  configured header, marked sensitive so it is redacted from logs. Omit
+  `auth` entirely for a keyless judge (local vLLM/Ollama).
+
+## The no-downgrade guarantee
+
+**Requirement:** once a session has routed to `strong`, a later turn must
+never be silently downgraded to `weak`.
+
+Switchyard v0.2.0 cannot provide this. Its Capability classifier is
+per-request/stateless; `session_affinity: true` is a *first-decision-wins*
+latch (it can pin a session to `weak` and block a needed upgrade); its
+session state is in-process, TTL-bound, and not seedable from outside. The
+filter therefore owns the guarantee, in two layers:
+
+1. **Don't overwrite on failure.** On *any* failure (bad body, unknown
+   format, judge callout error, missing subrequest client, decision-less
+   stream) the request passes through with the client's own `model`
+   untouched and no cluster set. The filter can never *cause* a downgrade by
+   clobbering a good model. This is stateless and survives everything.
+2. **Session floor.** An in-process `session → tier` map (keyed by
+   `session_header`, TTL-evicted, dropped on
+   `x-switchyard-session-final: true`). Every decision is clamped to
+   `max(floor, decision)` — the ratchet only moves up. With
+   `exclude_below: true` the below-floor tier is additionally excluded
+   inside Switchyard for that turn.
+
+### The judge tax, and the escalation ratchet
+
+The Capability classifier calls the judge on **every** turn — that is
+Switchyard's default, and this filter's. The judge is itself an LLM call, so
+routing only saves money when the judge is cheap relative to the
+weak↔strong gap, amortized over your traffic. A large frontier judge on
+every turn can cost more than it saves, especially on the easy turns that
+route `weak`.
+
+One slice of that cost is pure waste: once a session is floored at `strong`,
+the clamp forces `strong` regardless of what the judge says, so re-judging it
+spends a call to re-derive a foregone answer. `escalation_ratchet: true`
+skips the judge entirely on any turn whose floor is already `strong` and
+routes `strong` directly. It is **off by default** (matching Switchyard
+vanilla); turn it on to stop the wasted spend, at the cost of the
+(already-decided) per-turn verdict in the logs.
+
+This is deliberately the filter-side equivalent of Switchyard's own
+escalation latch, `AffinityRouter::with_latch_only(["strong"])` — a
+*directional* affinity that retains only the strong tier and never the weak
+one. We express it against the filter's floor store (keyed by
+`session_header`) rather than adopting `AffinityRouter`, which keys on
+request metadata and lives inside the classifier cascade the `run_stream`
+decision-only design bypasses. Same behaviour, no duplicated session state.
+
+Note it does **not** help the costs it can't: the first `strong` turn and
+every `weak` turn still judge. If most traffic is one-shot or always-easy,
+prefer a cheaper judge or a non-LLM pre-filter over this flag.
+
+**Honesty note for operators:** the floor cache has the same loss profile as
+Switchyard's own state — a process restart, config reload, failover, or
+replica hop wipes it. In those cases layer 1 degrades the behaviour to
+"route as the request already asked", never "downgrade below what the client
+asked". A durable floor store (Redis/KV behind the `SessionFloorStore` seam
+in `floor.rs`) is the planned follow-up that makes the strict ratchet hold
+across process boundaries.
+
+Judge failures inside Switchyard would default the decision to the capable
+tier; the filter deliberately does not rely on that — a judge transport
+error takes the host's failure path (pass through unmodified) so the outcome
+is owned here, not by library defaulting.
+
+## Failure topology: what `open` really does
+
+`on_failure: open` means the filter forwards the request unmodified — it
+does not select a cluster. What happens next depends on the chain:
+
+- If `switchyard_route` is the **only** cluster selector before
+  `load_balancer` (the demo topology below), the load balancer fails the
+  request: `no cluster set in context` → HTTP 500. Praxis rejects chains
+  with a second cluster selector, so there is no in-chain fallback route.
+- `on_failure: closed` rejects deliberately with **503** and a clear body —
+  for this topology it is the clearer choice if you prefer explicit errors.
+
+In other words: `open` guarantees the *optimizer can never rewrite your
+request wrongly*; it cannot conjure a route where none exists. Deployments
+that need judge-outage survivability should front a default route at a
+different layer.
+
+## Local demo (verified, real judge)
+
+Everything lives in `hack/switchyard-demo/` (see its README): the judge is
+a **real** OpenAI-compatible model of your choosing; only the two upstream
+"clusters" are stubbed (`upstreams.py`, loopback echo servers on
+`:18092`/`:18093`) so the chosen cluster and the rewritten `model` field
+are plainly visible. `run-demo.sh` renders `praxis.yaml` from the template,
+starts everything (gateway on `127.0.0.1:18080`), and runs four turns:
+
+```console
+$ cd hack/switchyard-demo
+$ JUDGE_ENDPOINT=http://127.0.0.1:11434/v1/chat/completions \
+  JUDGE_MODEL=llama3.2:3b \
+  ./run-demo.sh
+```
+
+Transcript (recorded 2026-08-18 against this revision, judge =
+`llama3.2:3b` served by a local Ollama — a real LLM verdict, not a script):
+
+```console
+--- turn 1: easy question, session demo-A (expect weak) ---
+{"served_by": "weak-upstream", "model_received": "qwen-mini"}
+--- turn 2: hard question, session demo-A (expect strong) ---
+{"served_by": "strong-upstream", "model_received": "qwen-max"}
+--- turn 3: easy question again, session demo-A (the floor must HOLD strong) ---
+{"served_by": "strong-upstream", "model_received": "qwen-max"}
+--- turn 4: easy question, fresh session demo-B (isolated; expect weak) ---
+{"served_by": "weak-upstream", "model_received": "qwen-mini"}
+```
+
+The client sent `"model": "agent-default"` on every turn; what each
+upstream *received* is the tier model the filter wrote. Turns 1/2/4 are the
+judge's real classification; turn 3 is the host-side floor holding `strong`.
+
+This transcript predates the escalation ratchet, so turn 3 there reached the
+judge and had its `weak` verdict *clamped* up. The demo config now sets
+`session_floor.escalation_ratchet: true`, so on a fresh run turn 3 skips the
+judge entirely (`grep 'ratchet held' server.log` — three judge calls, not
+four) and still holds `strong`. Same routing outcome, one fewer judge call.
+
+Judge-model realities observed while recording: a thinking model
+(`qwen3:8b`) blew a 20 s judge deadline on the hard prompt — the filter
+failed open exactly as designed (`routing unavailable: sub-request deadline
+exceeded`, body untouched). Pick a small, fast judge; the demo template
+uses a generous 60 s deadline for local models.
+
+With the judge stopped (upstreams still running), a request logs
+`switchyard_route: routing unavailable ... Connection refused` at the
+filter, passes through unmodified, and the load balancer returns 500 (`no
+cluster set in context`) — the topology consequence described above.
+
+## Scope and follow-ups
+
+- **Capability mode only.** Passthrough/Random make no LLM decision
+  (Praxis already load-balances); Escalation cannot be decision-only (its
+  verdict needs the efficient model's actual answer). Documented, not built.
+- **Two tiers** (`weak` < `strong`); N-way buckets would be Switchyard's
+  `Custom` path — follow-up territory.
+- **Durable session-floor store** (Redis/KV adapter behind
+  `SessionFloorStore`) — follow-up issue; required for the strict ratchet
+  across restarts/replicas.

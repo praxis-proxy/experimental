@@ -1,7 +1,13 @@
 [advisories]
 unmaintained = "all"
 maximum-db-staleness = "P30D"
-ignore = []
+ignore = [
+  # Unmaintained transitive deps pinned by the praxis 0.5.2 / pingora-fork
+  # (quixotic-plecostomus 0.8.2) tree; not fixable from this workspace.
+  # Revisit on every praxis/pingora bump.
+  { id = "RUSTSEC-2024-0388", reason = "derivative: unmaintained, via pingora-fork proxy crates" },
+  { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile: unmaintained, via pingora-fork rustls stack" },
+]
 
 [licenses]
 allow = [
@@ -14,6 +20,9 @@ allow = [
   "CDLA-Permissive-2.0",
   "ISC",
   "MIT",
+  # MIT No Attribution (OSI approved): borrow-or-share, via
+  # jsonschema <- switchyard-libsy.
+  "MIT-0",
   "Unicode-3.0",
   "Unicode-DFS-2016",
   "Unlicense",
@@ -30,4 +39,6 @@ highlight = "all"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+# praxis-ai crates are publish = false and only consumable as git dependencies;
+# switchyard-server pins them to an exact rev.
+allow-git = ["https://github.com/praxis-proxy/ai"]

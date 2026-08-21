@@ -21,10 +21,18 @@ WORKDIR /src
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates/experimental-probe/Cargo.toml crates/experimental-probe/Cargo.toml
+COPY crates/switchyard-filters/Cargo.toml crates/switchyard-filters/Cargo.toml
+COPY crates/switchyard-server/Cargo.toml crates/switchyard-server/Cargo.toml
 
+# Every workspace member's manifest must resolve, so stub a
+# source file for each (lib crates get lib.rs, bin crates main.rs).
 RUN mkdir -p crates/experimental-probe/src \
     && echo '//! stub' > crates/experimental-probe/src/lib.rs \
-    && printf '//! stub\nfn main() {}\n' > crates/experimental-probe/src/main.rs
+    && printf '//! stub\nfn main() {}\n' > crates/experimental-probe/src/main.rs \
+    && mkdir -p crates/switchyard-filters/src \
+    && echo '//! stub' > crates/switchyard-filters/src/lib.rs \
+    && mkdir -p crates/switchyard-server/src \
+    && printf '//! stub\nfn main() {}\n' > crates/switchyard-server/src/main.rs
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
