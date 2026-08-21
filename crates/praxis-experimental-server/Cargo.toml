@@ -1,0 +1,45 @@
+[package]
+name = "praxis-experimental-server"
+description = "Experimental Praxis AI gateway server composing the stock praxis-ai server with this workspace's filters"
+repository = "https://github.com/praxis-proxy/experimental"
+homepage = "https://github.com/praxis-proxy/experimental"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+# cargo-machete's source scan can't see these usages:
+#  - praxis-experimental-filters is consumed by the discovery build script (its presence
+#    as a direct dep, carrying the praxis-filters marker, is the point).
+#  - praxis-ai-proxy is used as `praxis_ai::...` (lib name differs from package).
+#  - praxis-filter is referenced only in build-script-generated code.
+[package.metadata.cargo-machete]
+ignored = ["praxis-experimental-filters", "praxis-ai-proxy", "praxis-filter"]
+
+[[bin]]
+name = "praxis-experimental-server"
+path = "src/main.rs"
+
+[dependencies]
+# Direct dependency on the filters crate is what makes it discoverable: the
+# build script scans this crate's direct runtime deps for the
+# `[package.metadata.praxis-filters]` marker.
+praxis-experimental-filters = { path = "../praxis-experimental-filters" }
+
+# Praxis core (crates.io) — for constructing the SubRequestClient that
+# `build_full_registry` requires. Keep the 0.5.x line in lockstep with the
+# git-pinned praxis-ai-proxy crate below so `FilterRegistry` unifies.
+praxis-filter = { version = "0.5.2", package = "praxis-proxy-filter" }
+praxis-core = { version = "0.5.2", package = "praxis-proxy-core" }
+
+# The stock praxis-ai server. Pinned to an exact commit because praxis-ai crates
+# are `publish = false` (git dependency only) and move fast; bump deliberately.
+praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "2d07c828e64e4f1f0bd80297478a6d19648c0cf3" }
+
+[build-dependencies]
+cargo_metadata = "0.23.1"
+praxis-ai-build-support = { git = "https://github.com/praxis-proxy/ai", rev = "2d07c828e64e4f1f0bd80297478a6d19648c0cf3" }

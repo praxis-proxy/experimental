@@ -1,0 +1,27 @@
+[package]
+name = "praxis-experimental-filters"
+description = "Experimental Praxis AI filters built around NVIDIA NeMo Switchyard"
+repository = "https://github.com/praxis-proxy/experimental"
+homepage = "https://github.com/praxis-proxy/experimental"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# Auto-discovery marker consumed by praxis-ai's build-time filter discovery
+# (praxis-ai `server/build.rs` + `praxis-ai-build-support`). The table is
+# intentionally empty; its presence is the whole signal.
+[package.metadata.praxis-filters]
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = "0.1.89"
+serde_yaml = { package = "yaml_serde", version = "0.10.4" }
+
+# Praxis core (crates.io). Keep in lockstep with praxis-proxy/ai's pins so the
+# `FilterRegistry` type unifies to a single version across this workspace and the
+# git-pinned praxis-ai-proxy server crate.
+praxis-filter = { version = "0.5.2", package = "praxis-proxy-filter" }

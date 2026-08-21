@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/experimental-probe"]
+members = ["crates/experimental-probe", "crates/praxis-experimental-filters", "crates/praxis-experimental-server"]
 
 [workspace.package]
 version = "0.1.0"
