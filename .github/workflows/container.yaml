@@ -4,9 +4,9 @@ name: Container
 # Workflow Settings
 # ------------------------------------------------------------------------------
 #
-# Builds the Containerfile and runs the resulting image once. The probe
-# binary runs to completion; a long-running service should instead add a
-# HEALTHCHECK to the Containerfile and wait for healthy status here.
+# Builds the Containerfile and smoke-tests the resulting image: starts the
+# gateway with a minimal config, waits for the Containerfile's HEALTHCHECK to
+# report healthy, and checks that it serves traffic.
 
 on:
   push:
@@ -23,7 +23,7 @@ permissions: {}
 
 jobs:
   # ----------------------------------------------------------------------------
-  # Build & Run Container
+  # Build & Smoke Test Container
   # ----------------------------------------------------------------------------
 
   build-and-run:
@@ -36,5 +36,44 @@ jobs:
       - name: Build container image
         run: docker build -t ghcr.io/praxis-proxy/experimental:ci -f Containerfile .
 
-      - name: Run container
-        run: docker run --rm ghcr.io/praxis-proxy/experimental:ci
+      # The server runs until stopped, so it starts detached. The config is
+      # mounted at /etc/praxis/praxis.yaml, which is the working directory the
+      # image resolves its config from.
+      - name: Start container
+        run: |
+          docker run --detach --name praxis-ci \
+            --publish 8080:8080 \
+            --volume "$PWD/examples/configs/minimal.yaml:/etc/praxis/praxis.yaml:ro" \
+            ghcr.io/praxis-proxy/experimental:ci
+
+      # Poll the Containerfile's HEALTHCHECK, which curls the admin /healthy
+      # endpoint from inside the container (it binds loopback, so it is not
+      # reachable from the runner).
+      - name: Wait for healthy
+        run: |
+          for _ in $(seq 1 30); do
+            status="$(docker inspect --format '{{.State.Health.Status}}' praxis-ci)"
+            case "$status" in
+              healthy) echo "container healthy"; exit 0 ;;
+              unhealthy) echo "container reported unhealthy"; exit 1 ;;
+            esac
+            sleep 2
+          done
+          echo "timed out waiting for healthy"
+          exit 1
+
+      - name: Check the gateway serves traffic
+        run: |
+          body="$(curl --fail --silent --show-error http://127.0.0.1:8080/)"
+          echo "$body"
+          echo "$body" | grep -q 'praxis-experimental'
+
+      # Always dump logs: on failure they are the only diagnostic, and the
+      # earlier steps exit non-zero without printing them.
+      - name: Container logs
+        if: always()
+        run: docker logs praxis-ci || true
+
+      - name: Stop container
+        if: always()
+        run: docker rm --force praxis-ci || true

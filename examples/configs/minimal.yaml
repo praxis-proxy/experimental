@@ -1,0 +1,51 @@
+# Minimal Experimental Gateway Config
+#
+# The smallest config that starts the experimental server and answers
+# health checks. Used by the container CI smoke test to prove the image
+# boots and stays up.
+#
+# This is NOT the quickstart. It configures no providers, no auth, and no
+# token accounting — it exists to verify the image runs. The quickstart
+# config lands with the MVP packaging work (praxis-proxy/ai#758).
+#
+# Usage:
+#   docker run --rm -p 8080:8080 \
+#     -v "$PWD/examples/configs/minimal.yaml:/etc/praxis/praxis.yaml:ro" \
+#     ghcr.io/praxis-proxy/experimental:latest
+#
+#   curl http://localhost:8080/
+#   curl http://127.0.0.1:9901/healthy   # from inside the container
+
+# The admin listener serves /healthy and /ready. It must bind to loopback
+# unless insecure_options.allow_public_admin is set, so it is reachable
+# from inside the container only — which is where HEALTHCHECK runs.
+admin:
+  address: "127.0.0.1:9901"
+
+listeners:
+  - name: default
+    # Binds all interfaces so the port is reachable from outside the
+    # container. Loopback here would only be reachable from within it.
+    address: "0.0.0.0:8080"
+    filter_chains:
+      - default-response
+
+filter_chains:
+  - name: default-response
+    filters:
+      - filter: static_response
+        status: 200
+        headers:
+          - name: Content-Type
+            value: application/json
+        body: '{"status": "ok", "server": "praxis-experimental"}'
+        conditions:
+          - when:
+              path: "/"
+
+      - filter: static_response
+        status: 404
+        headers:
+          - name: Content-Type
+            value: application/json
+        body: '{"error": "not found"}'
