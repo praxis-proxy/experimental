@@ -1,0 +1,92 @@
+# Demo fixture for the token-rate-limit-per-app-budgets demo (see the
+# sibling README.md). Both gateway instances in docker-compose.yml load
+# this same config, pointed at the same Valkey backend: that's what
+# makes their per-app-per-tier budgets shared rather than independent.
+# Deliberately small window/capacity/refill values so the curl
+# walkthrough exhausts and recovers a budget within seconds.
+#
+# Source: examples/configs/token-rate-limit-mixed-algorithms.yaml on
+# https://github.com/jordigilh/praxis-ai/tree/jordigilh/token-rate-limit-per-app-budgets
+#
+# Two rules, two algorithms, matched by an `x-tier` header -- the
+# per-rule algorithm choice from ai#789/praxis#551 (see README.md's
+# "Current scope"). `x-app-id` still keys an independent budget per app
+# *within* whichever rule matched, per ai#129.
+#
+# `window: 10s` / `refill_rate: 2` are also deliberately short (a real
+# deployment would use much larger values): long enough to observe each
+# algorithm's own recovery mechanics, short enough to watch happen
+# within a single curl walkthrough or recording.
+#
+# estimate_tokens is deliberately LOWER than each rule's capacity for both
+# tiers (15/40 gold, 7/10 silver) so a single request never exhausts a
+# budget outright -- multiple real, independently admitted requests are
+# visible before the eventual denial, instead of a one-shot cliff-edge.
+# Both values MUST exactly match what the backend's `usage.total_tokens`
+# reports for that tier (see k8s/02-backend.yaml / docker-compose.yml's
+# `backend` service, which reads the `x-tier` header for this reason) --
+# NOT a smaller "optimistic" estimate. This isn't cosmetic: reconciliation
+# debits `actual - estimate` as an *extra* charge beyond the estimate
+# already reserved whenever actual > estimate, symmetrically for both
+# algorithms (verified against the source branch's `Ledger::reconcile` /
+# `TokenBucketLedger::reconcile` and their unit tests -- see
+# recording/RECORDING.md's "Correction" section, which supersedes an
+# earlier, incorrect claim that the two algorithms reconciled
+# differently), so an estimate lower than the real backend usage would
+# silently over-drain either budget past what the naive "estimate only"
+# arithmetic below assumes. Keeping estimate and actual matched for both
+# tiers avoids depending on that reconciliation math at all.
+
+listeners:
+  - name: default
+    address: "0.0.0.0:8080"
+    filter_chains:
+      - main
+
+filter_chains:
+  - name: main
+    filters:
+      - filter: router
+        routes:
+          - path_prefix: "/"
+            cluster: backend
+
+      - filter: token_rate_limit
+        rules:
+          - name: gold-tier
+            match:
+              headers:
+                x-tier: gold
+            algorithm: sliding_window
+            window: 10s                   # sliding window duration, per app
+            capacity: 40                  # each app's budget within the window, in tokens
+            estimate_tokens: 15           # cost reserved per request -- 2 requests admit (30/40), a 3rd is denied
+            bucket_key_header: x-app-id   # one independent budget per app, within this rule
+            backend:
+              kind: valkey                # shared across every gateway instance/replica
+              url: "${TOKEN_RATE_LIMIT_VALKEY_URL}"
+              namespace: praxis-demo:token-rate-limit-per-app
+          - name: silver-tier
+            match:
+              headers:
+                x-tier: silver
+            algorithm: token_bucket
+            capacity: 10                  # each app's bucket ceiling, in tokens
+            refill_rate: 2                # tokens refilled per second, up to `capacity`
+            estimate_tokens: 7            # cost reserved per request -- 1 request admits (3 left), a back-to-back 2nd is denied; a 2s wait refills 4 (3+4=7) so a retry then admits
+            bucket_key_header: x-app-id   # one independent budget per app, within this rule
+            backend:
+              kind: valkey                # shared across every gateway instance/replica
+              url: "${TOKEN_RATE_LIMIT_VALKEY_URL}"
+              namespace: praxis-demo:token-rate-limit-per-app
+
+      - filter: token_count
+        provider: openai   # openai | anthropic | google | bedrock | azure
+
+      - filter: access_log
+
+      - filter: load_balancer
+        clusters:
+          - name: backend
+            endpoints:
+              - "backend:3000"

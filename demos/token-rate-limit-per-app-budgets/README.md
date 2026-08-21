@@ -1,0 +1,602 @@
+# Per-app token budgets with token_rate_limit, mixed algorithms per rule
+
+> [!IMPORTANT]
+> This is early exploratory work intended to validate the sliding-window
+> ledger and bucket-key architecture and inform the design questions
+> still open on [ai#658](https://github.com/praxis-proxy/ai/pull/658),
+> the canonical Token Rate Limiting proposal. It is not the final
+> upstream design — see "Current scope" and "Open design questions"
+> below. Configuration and behavior are expected to change, possibly
+> substantially, as the proposal is reviewed and implemented upstream.
+>
+> **The `token_rate_limit` code this demo exercises has not landed in
+> `praxis-ai` (or any upstream repo) yet.** It only exists on a personal
+> fork branch. "Build and run" below is not optional boilerplate — you
+> cannot build this demo's gateway image without pointing at that
+> branch, because `main` does not have this filter's sliding-window/
+> token-bucket/Valkey support at all.
+>
+> **As of this writing, the mixed-algorithm commits described below are
+> committed locally on that branch but not yet pushed to the fork.**
+> `PRAXIS_AI_SRC` pointed at a local checkout of the branch will pick
+> them up; cloning the fork remote fresh (as "Build and run" shows)
+> will not, until the push happens. This note should be removed once
+> the branch is pushed.
+
+This demo runs **two independent Praxis AI gateway instances** sharing
+one Valkey-backed `token_rate_limit` budget per application, evaluated
+against **two rules, each independently choosing its own admission
+algorithm** — the current scenario for per-app budgets: an app's
+traffic can land on either gateway replica and still draw down the
+same budget, and different apps can be on entirely different
+algorithms in the same deployment. It validates, end-to-end and across
+a real process boundary:
+
+- **Per-rule algorithm choice**, per
+  [ai#789](https://github.com/praxis-proxy/ai/issues/789) (originally
+  filed as `praxis#551`, same issue — see "Open design questions"):
+  a `gold-tier` rule (`x-tier: gold`) enforces an exact sliding-window
+  budget; a `silver-tier` rule (`x-tier: silver`) enforces a
+  continuously-refilling token-bucket budget, in the same filter
+  instance. See "Current scope" for exactly what's implemented where.
+- [ai#129](https://github.com/praxis-proxy/ai/issues/129)'s
+  `bucket_key_header` proposal: within whichever rule matched, one
+  independent token budget per unique value of a configured request
+  header (`x-app-id` here).
+- Reservation-based admission, reconciled against actual
+  provider-reported usage, shared atomically across gateway replicas
+  via Valkey — for **both** algorithms, not just one.
+
+## What this demonstrates
+
+- A platform operator configures an ordered list of `token_rate_limit`
+  rules, each with its own optional `match` condition and its own
+  admission algorithm (`sliding_window` or `token_bucket`); the first
+  rule whose `match` is satisfied applies. Within a matched rule, a
+  `bucket_key_header` (e.g. `x-app-id`) gives every unique header value
+  its own independent budget, shared by every gateway instance pointed
+  at the same Valkey namespace.
+- **An app's budget is enforced consistently regardless of which
+  gateway instance its traffic lands on, for either algorithm.** A
+  request admitted on gateway A that exhausts app-a's (sliding-window)
+  or app-b's (token-bucket) budget is visible immediately as an
+  exhausted budget on gateway B — there is no per-replica budget
+  multiplication, and this guarantee doesn't depend on which algorithm
+  the matched rule picked.
+- Each app's traffic draws down only its own budget: one app exhausting
+  its budget and receiving `429`s has zero effect on any other app,
+  even sharing the same Valkey namespace, even when they're on
+  different rules/algorithms entirely.
+- Requests missing the configured `bucket_key_header` fall back to one
+  shared budget per rule.
+- Praxis reserves an estimated token cost at admission and reconciles
+  it against the provider's actual reported usage once the response
+  completes — unused capacity is returned to the budget either way,
+  but the two algorithms recover it differently: sliding_window returns
+  it as the trailing window slides past the reservation; token_bucket
+  returns it immediately on reconciliation and additionally refills
+  continuously over time.
+- Standard `429` responses carry token-denominated
+  `X-RateLimit-*-Tokens` headers and a `Retry-After` value, computed
+  correctly for either algorithm.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    A1[app-a traffic] -->|x-tier: gold<br/>x-app-id: app-a| GA[Gateway A :8080]
+    A2[app-a traffic] -->|x-tier: gold<br/>x-app-id: app-a| GB[Gateway B :8081]
+    C1[app-c traffic] -->|x-tier: gold<br/>x-app-id: app-c| GA
+    B1[app-b traffic] -->|x-tier: silver<br/>x-app-id: app-b| GA
+    B1b[app-b traffic] -->|x-tier: silver<br/>x-app-id: app-b| GB
+
+    GA --> TRLA[token_rate_limit]
+    GB --> TRLB[token_rate_limit]
+
+    TRLA -->|x-tier: gold| RWA[gold-tier rule<br/>sliding_window]
+    TRLA -->|x-tier: silver| RSA[silver-tier rule<br/>token_bucket]
+    TRLB -->|x-tier: gold| RWB[gold-tier rule<br/>sliding_window]
+    TRLB -->|x-tier: silver| RSB[silver-tier rule<br/>token_bucket]
+
+    RWA <--> V[(Shared Valkey<br/>one ledger per rule per app)]
+    RSA <--> V
+    RWB <--> V
+    RSB <--> V
+
+    RWA -->|admitted| BE[Backend]
+    RSA -->|admitted| BE
+    RWB -->|admitted| BE
+    RSB -->|admitted| BE
+```
+
+Unlike the
+[distributed token rate limiting with Grid routing](../grid-distributed-token-rate-limit/README.md)
+demo (which layers a shared quota under Grid's multi-cluster provider
+routing), this demo is deliberately narrow: two gateway replicas, one
+Valkey instance, no Grid, no multi-cluster routing. It isolates the
+per-app bucket-key architecture and the sliding-window/Valkey backend
+questions from the routing-layer questions the other demo explores.
+
+## Recorded walkthrough
+
+<!-- markdownlint-disable-next-line MD034 -->
+https://github.com/user-attachments/assets/f8ee89ed-ab77-45c4-a31f-bb7c67a78ca0
+
+`recording/output/k8s-real-pods-token-rate-limit.mp4` (1920x1080, h264/aac,
+~143s) is a narrated recording of the mixed-algorithm scenario below,
+driven through `dashboard/` against a real Kubernetes (`kind`) deployment
+of the two-gateway + Valkey stack (`k8s/`, `deploy.sh`) -- every pod name,
+gateway log line, and per-request HTTP call shown is real, not simulated.
+Requests are paced against the narration throughout the clip; each app's
+budget renders as a live gauge plus a rolling chart so the `sliding_window`
+"flat until the window slides" recovery and the `token_bucket` "continuous
+ramp" recovery are visually distinct, not just narrated; and a live
+namespace/pod-status strip shows every pod in the deployment, polled from
+the real Kubernetes API. See `recording/RECORDING.md` for what it proves
+and how it was produced.
+
+`dashboard/` is a browser-facing convenience used for recording; it wraps
+the same HTTP contract as the curl walkthrough below and is not part of
+the Praxis AI filter chain.
+
+## Prerequisites
+
+- Docker or Podman with Compose (`docker compose` / `podman compose`)
+- Git and `curl`
+
+## Build and run
+
+Clone this repo and the source branch as siblings, then point
+`PRAXIS_AI_SRC` at the source checkout and bring the stack up:
+
+```bash
+git clone https://github.com/praxis-proxy/experimental.git
+git clone --branch jordigilh/token-rate-limit-per-app-budgets \
+  https://github.com/jordigilh/praxis-ai.git praxis-ai-trl-demo
+
+cd experimental/demos/token-rate-limit-per-app-budgets
+export PRAXIS_AI_SRC=../../../praxis-ai-trl-demo
+docker compose up --build -d   # or: podman compose up --build -d
+```
+
+This builds the gateway image from the source branch's own
+`Containerfile` (a first build compiles the whole Rust workspace, so
+expect it to take several minutes) and starts four containers:
+
+| Service | Role |
+| --- | --- |
+| `valkey` | Shared ledger backend for both the sliding-window (`gold-tier`) and token-bucket (`silver-tier`) rules |
+| `backend` | Minimal stub upstream, returns an OpenAI-shaped response with a tier-aware `usage.total_tokens` (15 for `x-tier: gold`, 7 for `x-tier: silver`, matching `config.yaml`'s `estimate_tokens` exactly -- see "Validate the request flow" for why that match matters) |
+| `gateway-a` | Praxis AI gateway, `127.0.0.1:8080` |
+| `gateway-b` | Praxis AI gateway, same image/config/Valkey namespace, `127.0.0.1:8081` |
+
+Both gateways load the exact same `config.yaml` (two rules, one per
+algorithm); the only thing that makes their budgets *shared* rather
+than *independent* is pointing both at the same Valkey `namespace`.
+
+## Run on Kubernetes (kind)
+
+The recorded walkthrough above ran this same stack on a real `kind`
+cluster instead of `docker compose` -- every pod name, gateway log
+line, and per-request HTTP call in the video is real. `k8s/deploy.sh`
+reproduces that deployment. You'll additionally need `kind` and
+`kubectl` installed.
+
+```bash
+# 1. Build the gateway image from the source branch checked out above.
+cd ../../../praxis-ai-trl-demo
+podman build -t docker.io/library/praxis-ai-trl-demo:local -f Containerfile .
+
+# 2. Create a kind cluster and load the image into it -- k8s/03-gateways.yaml
+#    sets imagePullPolicy: Never, so the image must already be on the node
+#    rather than pulled from a registry.
+KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster --name trl-demo
+podman save docker.io/library/praxis-ai-trl-demo:local -o /tmp/praxis-ai-trl-demo.tar
+KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive \
+  /tmp/praxis-ai-trl-demo.tar --name trl-demo
+
+# 3. Deploy the namespace, Valkey, backend, both gateways, three apps, and
+#    the dashboard, and wait for every pod to be ready.
+cd ../experimental/demos/token-rate-limit-per-app-budgets
+./k8s/deploy.sh
+
+# 4. Port-forward the same ports "Validate the request flow" and the
+#    dashboard use below, so those curl commands work unmodified.
+kubectl -n trl-demo port-forward svc/gateway-a 8080:8080 &
+kubectl -n trl-demo port-forward svc/gateway-b 8081:8080 &
+kubectl -n trl-demo port-forward svc/dashboard 3000:3000 &
+```
+
+Docker users can drop `KIND_EXPERIMENTAL_PROVIDER=podman` and swap in
+`docker save`/`docker load` for the equivalent `podman` commands. Tear
+down with `KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name
+trl-demo` when done.
+
+## Validate the request flow
+
+`gold-tier` (`sliding_window`) uses `capacity: 40` tokens,
+`estimate_tokens: 15` per request — deliberately *lower* than capacity, so
+a single request never exhausts the budget outright: two requests admit
+(15 + 15 = 30 reserved), a third is denied (needs 15, only 10 remain).
+`silver-tier` (`token_bucket`) uses `capacity: 10`, `estimate_tokens: 7` —
+one request admits (7 reserved, 3 remaining), a second immediately after
+is denied (needs 7, only 3 remain), but waiting just ~2 more seconds
+refills 4 tokens (`refill_rate: 2`/sec) — 3 + 4 = 7, exactly enough for a
+retry to succeed. Both tiers' `estimate_tokens` are set to **exactly**
+match what the stub backend reports as `usage.total_tokens` for that tier
+(read from the `x-tier` header — see `docker-compose.yml`'s `backend`
+service) and *must* stay matched: reconciliation debits `actual - estimate`
+as an *extra* charge on top of the estimate already reserved whenever
+actual usage exceeds the estimate — symmetrically for both algorithms, per
+the source branch's `Ledger::reconcile`/`TokenBucketLedger::reconcile` and
+their unit tests — so a lower estimate than the real backend usage would
+silently over-drain either budget past this walkthrough's math. Keeping
+`estimate_tokens` matched to actual usage for both tiers keeps the numbers
+below exact and avoids depending on reconciliation's refund/overage timing
+at all. Both `gold-tier`'s
+`window: 10s` and `silver-tier`'s `refill_rate: 2` tokens/sec are
+similarly shortened from realistic production values purely so recovery
+is watchable in seconds instead of the hour+ a production deployment
+would take. Every request must carry `x-tier` (selects the rule/algorithm)
+alongside `x-app-id` (selects the per-app budget within that rule) — a
+request missing `x-tier` matches no rule and isn't rate-limited by this
+filter instance at all (see `config.yaml`).
+
+Send app-a's (`x-tier: gold`, sliding_window) first two requests as a
+rapid burst — one to gateway A, one to gateway B, the *other* process —
+then a third, back on gateway A:
+
+```bash
+echo "== app-a (gold/sliding_window) on gateway A (expect 200 -- 15/40 reserved, 25 remaining) =="
+curl -si http://127.0.0.1:8080/v1/chat/completions \
+  -H "x-tier: gold" -H "x-app-id: app-a" -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}' \
+  | grep -Ei '^(HTTP|x-ratelimit|retry-after)'
+
+echo "== app-a on gateway B, right after (expect 200 -- shared ledger keeps accumulating: 30/40 reserved, 10 left) =="
+curl -si http://127.0.0.1:8081/v1/chat/completions \
+  -H "x-tier: gold" -H "x-app-id: app-a" -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}' \
+  | grep -Ei '^(HTTP|x-ratelimit|retry-after)'
+
+echo "== app-a's third request, back on gateway A (expect 429 -- needs 15, only 10 remain, on either gateway) =="
+curl -si http://127.0.0.1:8080/v1/chat/completions \
+  -H "x-tier: gold" -H "x-app-id: app-a" -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}' \
+  | grep -Ei '^(HTTP|x-ratelimit|retry-after)'
+
+echo "== app-c (gold/sliding_window) on gateway A (expect 200 -- unaffected by app-a) =="
+curl -si http://127.0.0.1:8080/v1/chat/completions \
+  -H "x-tier: gold" -H "x-app-id: app-c" -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}' \
+  | grep -Ei '^(HTTP|x-ratelimit|retry-after)'
+
+echo "== app-b (silver/token_bucket) on gateway A (expect 200 -- 7/10 reserved, 3 remaining) =="
+curl -si http://127.0.0.1:8080/v1/chat/completions \
+  -H "x-tier: silver" -H "x-app-id: app-b" -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}' \
+  | grep -Ei '^(HTTP|x-ratelimit|retry-after)'
+
+echo "== app-b on gateway B, right after (expect 429 -- needs 7, 3 remain -- Valkey enforces token_bucket too) =="
+curl -si http://127.0.0.1:8081/v1/chat/completions \
+  -H "x-tier: silver" -H "x-app-id: app-b" -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}' \
+  | grep -Ei '^(HTTP|x-ratelimit|retry-after)'
+```
+
+Expect (verified against a live run of this exact scenario, driven
+directly against the built gateway binaries against a real Valkey
+instance while authoring this demo):
+
+- app-a's request on gateway A: `200`.
+- app-a's request on gateway B, immediately after: `200` — the *other*
+  gateway process sees and adds to the very same accumulated reservation,
+  because both consult the same Valkey ledger rather than keeping
+  independent in-process state.
+- app-a's third request, back on gateway A: `429` with
+  `X-RateLimit-Remaining-Tokens: 0`, `Retry-After: 10` — gold-tier is now
+  exhausted (30 reserved + 15 needed > 40 capacity), consistently, no
+  matter which gateway is asked.
+- app-c's request on gateway A: `200` — app-c's budget is untouched by
+  app-a's exhaustion, even on the same rule/algorithm and Valkey
+  namespace.
+- app-b's request on gateway A: `200` — a completely different rule
+  (`silver-tier`, `token_bucket`), matched purely on `x-tier`, with its
+  own budget.
+- app-b's request on gateway B, immediately after: `429` with
+  `X-RateLimit-Remaining-Tokens: 0`, `Retry-After: 2` — a single burst
+  already leaves too little (3 remaining) for a second 7-token call,
+  proving the shared-Valkey, cross-instance guarantee holds for
+  `token_bucket` too, not just `sliding_window`.
+
+Wait for both algorithms to recover, then retry both app-a on gateway A
+and app-b on gateway B — no restart, no manual reset, nothing but time
+passing:
+
+```bash
+sleep 11
+echo "== app-a on gateway A again (expect 200 -- sliding window recovered) =="
+curl -si http://127.0.0.1:8080/v1/chat/completions \
+  -H "x-tier: gold" -H "x-app-id: app-a" -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}' \
+  | grep -Ei '^(HTTP|x-ratelimit|retry-after)'
+
+echo "== app-b on gateway B again (expect 200 -- token bucket refilled) =="
+curl -si http://127.0.0.1:8081/v1/chat/completions \
+  -H "x-tier: silver" -H "x-app-id: app-b" -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}' \
+  | grep -Ei '^(HTTP|x-ratelimit|retry-after)'
+```
+
+Expect `200` on both. What "recovered" means differs sharply by algorithm:
+
+- **app-a (sliding_window)**: the trailing window has moved forward far
+  enough that app-a's earlier reservations are no longer counted against
+  its budget. There is no fixed reset boundary (like a calendar month
+  rolling over); the budget recovers continuously and independently as
+  its own past usage ages out — but it needs the *full* `window: 10s` to
+  do so.
+- **app-b (token_bucket)**: the bucket has been continuously refilling at
+  `refill_rate: 2` tokens/sec since app-b's last request (reconciliation
+  itself credits back ~0 here, by design — see "Validate the request
+  flow" above, since actual usage always equals the estimate). It becomes
+  admissible again in just **2 seconds** from the denied attempt (3
+  remaining + 2s × 2 tokens/sec = 7, exactly the estimate needed) — a
+  fraction of gold-tier's full 10s window, since refill is continuous
+  rather than gated on a fixed boundary. The `sleep 11` above is sized for
+  gold-tier's slower path, not because silver-tier needs anywhere near
+  that long.
+
+This was verified against a live run of the built gateway binaries
+(`praxis-ai` from the source branch) directly against a real Valkey
+instance while authoring this demo -- two gateway processes on
+different ports, both pointed at the same Valkey, driven with the
+`curl` commands above, not just checked against source. It was **not**
+separately re-verified through the `docker compose` stack itself in
+this environment (a local container-runtime issue blocked bringing the
+compose stack up while authoring this update); the compose stack uses
+the identical `config.yaml` and gateway image, so the same behavior is
+expected, but that specific path is unconfirmed as of this writing.
+
+## Current scope
+
+This needs to be read alongside
+[ai#658](https://github.com/praxis-proxy/ai/pull/658)'s own review
+thread, not as a substitute for it:
+
+- **Per-rule algorithm choice is now implemented on the source
+  branch**: `rules:` is an ordered list, each with its own optional
+  `match`, its own algorithm (`sliding_window` or `token_bucket`), and
+  its own budget -- exactly the capability the "Open design questions"
+  section below used to flag as confirmed-but-not-built. **This is
+  still only on the personal fork branch this demo builds from, not
+  merged into `praxis-ai` upstream.**
+- **sliding_window**: an exact trailing-window admission ledger,
+  matching ai#658's current design doc ("windows are sliding: a
+  `window: 1h` budget tracks usage in the most recent 60 minutes from
+  the current instant"). [ai#789](https://github.com/praxis-proxy/ai/issues/789)
+  ("Sliding window rate limiting" — note: this issue was originally
+  filed as `praxis#551` and later transferred to the `ai` repo as
+  `ai#789`; both numbers refer to the *same* single issue, not two
+  separate tracks) is still open; this filter carries its own
+  sliding-window ledger rather than depending on it, so it doesn't
+  block this MVP.
+- **token_bucket**: continuous refill up to `capacity` at `refill_rate`
+  tokens/sec, reusing Praxis's own lock-free
+  `traffic_management::token_bucket` refill formula, extended with the
+  reserve/reconcile split this filter needs. This demo's *first*
+  version implemented token bucket unconditionally (before
+  sliding_window existed in the source branch); see "Alternative
+  implementations considered" below for that history. Per-rule choice
+  means both now coexist rather than one superseding the other.
+- **The per-key bucket architecture** (resolve a key from a
+  configurable header, look it up in a keyed map, fall back to a
+  shared budget when the header's absent, evict idle keys) is meant to
+  be reusable regardless of which rate-limiting algorithm ai#658
+  ultimately specifies.
+- **State is pluggable**: in-process (default, one gateway, no shared
+  state) or Valkey (`backend: {kind: valkey}`, this demo). Both share
+  the same reservation/reconciliation semantics; only where the ledger
+  lives differs.
+- Composite/multi-dimension keys, per-model keys, CEL-expression keys,
+  configurable token estimation, and token-type-aware accounting are
+  all out of scope here — see the module doc on the source branch for
+  the full list.
+
+## Alternative implementations considered
+
+- **Envoy-style external rate-limit gRPC service.** The canonical
+  Envoy pattern runs quota state behind a separate gRPC sidecar/service
+  that every proxy instance calls out to. Rejected here in favor of an
+  in-filter backend trait (`reserve`/`reconcile` calls made directly
+  from the filter, Valkey accessed via a plain client rather than a
+  bespoke RPC surface): it avoids standing up and operating an
+  additional service just for this MVP, at the cost of coupling the
+  quota logic to Praxis AI's own filter lifecycle rather than making it
+  reusable outside Praxis. Worth revisiting if quota enforcement needs
+  to be shared with non-Praxis callers.
+- **Token bucket only, no algorithm choice (this demo's first
+  version).** The very first version of this demo implemented a
+  token-bucket algorithm (`rate`/`burst` refill) unconditionally, not
+  sliding-window, because the sliding-window ledger didn't exist yet in
+  the source branch and ai#789 (filed as `praxis#551`) was — and still
+  is — open/unresolved. That version was superseded once the source
+  branch grew its own exact sliding-window ledger (adapted from
+  [nerdalert's spike branch](https://github.com/nerdalert/ai/tree/poc/distributed-token-rate-limit-demo)),
+  closing the gap with ai#658's design doc without waiting on ai#789 --
+  and *that* version, in turn, is what this demo now extends with
+  per-rule algorithm choice rather than picking one algorithm to keep
+  and one to drop.
+- **[Distributed token rate limiting with Grid routing](../grid-distributed-token-rate-limit/README.md)
+  demo's approach.** That demo validates the same Valkey-backed
+  sliding-window ledger concept, but keyed by authenticated
+  principal+model and layered under Grid's multi-cluster provider
+  routing on a full Kind/Helm/Grid stack. This demo deliberately keeps
+  the same core idea (shared Valkey ledger, reservation/reconciliation)
+  but strips out Grid, multi-cluster routing, and authentication
+  entirely, keyed by a plain request header instead, so the per-app
+  bucket-key question can be evaluated in isolation on a two-container
+  `docker compose` stack instead of a multi-cluster deployment.
+- **Local-only in-memory state for the "shared across replicas"
+  scenario.** Rejected as insufficient for what this demo specifically
+  needs to show: in-process state is already covered by this filter's
+  default (no `backend:` block) and is fine for a single gateway
+  instance, but says nothing about the multi-replica case, which is
+  the actual point of this demo. Valkey is the minimum needed to prove
+  budgets survive a real process boundary.
+
+## Open design questions
+
+These are unresolved as of this writing. Expect this demo's behavior,
+config shape, or scope to change once they're settled — treat it as a
+snapshot of one point in an ongoing design discussion, not a preview of
+the final feature.
+
+- **Per-rule algorithm choice is implemented here, but only on a
+  personal fork branch, and upstream hasn't weighed in on the shape.**
+  Neither the epic ([ai#121](https://github.com/praxis-proxy/ai/issues/121))
+  nor the proposal ([ai#658](https://github.com/praxis-proxy/ai/pull/658))
+  originally said whether `token_rate_limit` should support only sliding
+  window, or let an operator pick an algorithm per rule; the "Sliding
+  window rate limiting" issue itself
+  ([ai#789](https://github.com/praxis-proxy/ai/issues/789), also
+  reachable via its original number `praxis#551` — same issue, not a
+  separate one) states per-rule algorithm choice as an explicit goal
+  ("independent of token bucket, operators choose per rule"), and this
+  demo/source branch now implement exactly that (`rules:` with a
+  `match` + `algorithm` per rule -- see "Current scope"). What's still
+  open: whether `rules:`/`match: {headers: ...}` is the config shape
+  upstream actually wants (vs. e.g. a different matcher syntax, CEL
+  expressions per praxis#189/#232, or a different name), and whether a
+  third algorithm (fixed window) should exist alongside these two.
+  Don't read this demo's specific config shape as upstream-approved;
+  it's one concrete proposal for maintainer review, not a decision.
+- **Window duration and refill rate are config knobs, not yet
+  customer-tunable requirements anywhere in the proposal.** This demo
+  uses `window: 10s` and `refill_rate: 2` purely to make each
+  algorithm's recovery visible in a short recording; nothing in ai#658
+  pins either value, and calendar-aligned windows (e.g. reset at UTC
+  midnight rather than "most recent N seconds") are a distinct semantic
+  that neither algorithm here provides and hasn't been requested yet.
+- ~~The two algorithms reconcile differently~~ **Correction**: an earlier
+  version of this section claimed `token_bucket` and `sliding_window`
+  reconcile estimate/actual gaps differently, framed as an open upstream
+  question. That claim was wrong — re-reading the source branch's
+  `Ledger::reconcile` and `TokenBucketLedger::reconcile` (and their unit
+  tests, e.g. `reconcile_releases_unused_tokens_on_overestimate`) shows both
+  apply the identical estimate-vs-actual delta; `sliding_window` does
+  retroactively shrink what's counted against its window on an
+  overestimate, it just does so by recording the *settled* usage at the
+  actual token count rather than by adjusting a live balance the way a
+  bucket does. There is no known open design question here upstream; see
+  `recording/RECORDING.md`'s "Correction" section for the full
+  explanation.
+- **The Valkey backend is a spike, not yet aligned with
+  [grid#83](https://github.com/praxis-proxy/grid/issues/83)**, the
+  authoritative spec for Valkey-backed distributed quota state (published
+  after this demo's backend was first written). Concretely, against
+  grid#83's requirements:
+  - *Met:* atomic reserve/reconcile via Lua (`EVAL`), idempotent
+    reconciliation (a reservation can only be settled once), reservation
+    TTL + cleanup for abandoned requests, and **fail-closed on backend
+    error** — a Valkey timeout or error returns `503`, not silent
+    admission (see `on_request` in the source branch's `mod.rs`).
+  - *Not met, by deliberate demo simplification:* this compose stack's
+    Valkey runs with **no authentication** and **`--save ""`
+    (persistence disabled)** — see `docker-compose.yml`. grid#83 requires
+    explicit auth, private network access, and documented durable
+    storage/backup behavior; this demo proves none of that, only the
+    reservation/reconciliation logic on top of an ephemeral, unauthenticated
+    instance.
+  - *Not exercised by this demo's walkthrough or test suite:* grid#83's
+    validation checklist also asks for proof that usage survives a
+    consumer restart, that concurrent reservations can't oversubscribe
+    capacity under load, and that a Valkey outage-then-recovery cycle
+    fails closed and then resumes without resetting existing usage. None
+    of those are demonstrated here — only the steady-state admit/deny/
+    recover-on-window-slide path is.
+  - *Config gap:* the backend/Lua layer already supports multiple atomic
+    budgets per key (`Vec<Budget>`), but `token_rate_limit`'s own config
+    schema only exposes a single `window`/`capacity` pair per rule today —
+    multi-window enforcement exists underneath but isn't wired up to
+    configuration yet.
+
+## References
+
+This demo's config surface and admission logic are traceable to specific
+upstream discussions and, where nothing upstream covers it yet, to
+established prior art outside Praxis. Neither list below is a claim of
+correctness or of upstream endorsement — see "Current scope" and "Open
+design questions" above for what's actually settled vs. still open.
+
+### Praxis issues this demo derives from
+
+- [ai#121: Epic — Token Rate
+  Limiting](https://github.com/praxis-proxy/ai/issues/121) — the
+  umbrella epic this whole filter falls under.
+- [ai#658: Canonical Token Rate Limiting
+  proposal](https://github.com/praxis-proxy/ai/pull/658) — this demo's
+  baseline design doc; see "Current scope" for exactly which parts of it
+  are implemented here vs. still under review.
+- [ai#789: Sliding window rate
+  limiting](https://github.com/praxis-proxy/ai/issues/789) (originally
+  filed as
+  [praxis#551](https://github.com/praxis-proxy/praxis/issues/551), same
+  issue) — the per-rule-algorithm-choice requirement this demo/source
+  branch implement; still open upstream.
+- [ai#129: Per-header rate limit bucket
+  keys](https://github.com/praxis-proxy/ai/issues/129) — the
+  `bucket_key_header` proposal this demo's per-app (`x-app-id`)
+  budgeting is a concrete implementation of.
+- [grid#83: Support Valkey-backed distributed quota
+  state](https://github.com/praxis-proxy/grid/issues/83) — the
+  authoritative spec this demo's Valkey backend is a deliberately
+  simplified spike against; see "Open design questions" for the specific
+  gaps (auth, persistence, load/failover testing).
+
+### External prior art (for logic not yet specified in Praxis)
+
+Where a design choice isn't covered by any of the issues above, it
+follows established external precedent instead of being invented for
+this demo:
+
+- [Token bucket (Wikipedia)](https://en.wikipedia.org/wiki/Token_bucket) —
+  the classical algorithm `silver-tier`'s `token_bucket` admission
+  follows: continuous refill up to a fixed capacity, drained per
+  admitted request, independent of any window boundary.
+- [Cloudflare — "How we built rate limiting capable of scaling to
+  millions of
+  domains"](https://blog.cloudflare.com/counting-things-a-lot-of-different-things/)
+  — the canonical reference for sliding-window-style rate limiting at
+  scale. Note `gold-tier`'s `sliding_window` here is an **exact**
+  trailing-window ledger (sums real reservations still inside the
+  window, per ai#658's design doc), not Cloudflare's O(1)-memory
+  *approximate* two-counter estimate described in that post — related
+  algorithm family, different technique, cited here for the general
+  sliding-window concept rather than as a claim this filter
+  reimplements Cloudflare's specific approximation.
+- [envoyproxy/ratelimit](https://github.com/envoyproxy/ratelimit) — the
+  canonical external-gRPC-rate-limit-service pattern, considered and
+  rejected for this filter in favor of an in-filter backend trait; see
+  "Alternative implementations considered".
+- [Redis — rate limiter
+  patterns](https://redis.io/docs/latest/develop/use-cases/rate-limiter/) —
+  the atomic reserve/consume-via-Lua-`EVAL` pattern this filter's
+  Valkey backend follows to keep the reserve-then-decide step
+  race-free across concurrent requests from both gateway replicas.
+- [nerdalert's `distributed-token-rate-limit-demo` spike
+  branch](https://github.com/nerdalert/ai/tree/poc/distributed-token-rate-limit-demo)
+  — the source this demo's exact sliding-window ledger was originally
+  adapted from, before per-rule algorithm choice was added on top; see
+  "Alternative implementations considered" for that history.
+
+### Related demo and source
+
+- [Source
+  branch](https://github.com/jordigilh/praxis-ai/tree/jordigilh/token-rate-limit-per-app-budgets)
+  — the personal fork branch this demo's gateway image builds from (see
+  the warning banner at the top of this README).
+- [Distributed token rate limiting with Grid
+  routing](../grid-distributed-token-rate-limit/README.md) — a
+  complementary demo exploring distributed counters, authentication,
+  and multi-gateway quota sharing under Grid routing.
