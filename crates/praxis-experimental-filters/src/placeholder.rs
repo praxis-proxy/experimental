@@ -43,7 +43,12 @@ impl HttpFilter for PlaceholderFilter {
 
 #[cfg(test)]
 #[expect(clippy::allow_attributes, reason = "blanket test-module suppressions")]
-#[allow(clippy::unwrap_used, clippy::panic, reason = "unwrap/panic are acceptable in tests")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "unwrap/expect/panic are acceptable in tests"
+)]
 mod tests {
     use praxis_filter::FilterRegistry;
 
@@ -57,6 +62,29 @@ mod tests {
             praxis_filter::HttpFilter::name(&filter),
             "experimental_placeholder",
             "advertised name must match the export_filters! registration"
+        );
+    }
+
+    /// `from_config` ignores its configuration and yields a working filter.
+    #[test]
+    fn from_config_ignores_configuration() {
+        let config = serde_yaml::from_str("anything: ignored").expect("test YAML should parse");
+        let filter = PlaceholderFilter::from_config(&config).expect("placeholder config never fails");
+        assert_eq!(
+            filter.name(),
+            "experimental_placeholder",
+            "filter built from config must advertise the registered name"
+        );
+    }
+
+    /// `from_config` also accepts an empty mapping, which is what a bare
+    /// `- filter: experimental_placeholder` entry deserializes to.
+    #[test]
+    fn from_config_accepts_empty_mapping() {
+        let config = serde_yaml::from_str("{}").expect("empty mapping should parse");
+        assert!(
+            PlaceholderFilter::from_config(&config).is_ok(),
+            "an empty config mapping must be accepted"
         );
     }
 

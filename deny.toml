@@ -1,7 +1,18 @@
 [advisories]
 unmaintained = "all"
 maximum-db-staleness = "P30D"
-ignore = []
+# Transitive dependencies of the Pingora fork, reached through praxis-ai.
+# Not under our control; mirrors the ignore lists in praxis-proxy/praxis and
+# praxis-proxy/ai.
+ignore = [
+  # derivative 2.2.0: unmaintained
+  "RUSTSEC-2024-0388",
+  # rustls-pemfile 2.2.0: unmaintained
+  "RUSTSEC-2025-0134",
+  # lru 0.16.4: unsound LruCache::pop() panic safety, via
+  # quixotic-plecostomus-cache / -pool
+  "RUSTSEC-2026-0253",
+]
 
 [licenses]
 allow = [
