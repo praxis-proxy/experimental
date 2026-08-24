@@ -37,13 +37,13 @@ inter-filter contracts, and consumer branching only.
 
 All identity keys are dot-namespaced under `identity.`:
 
-| Key                     | Required            | Meaning                                                                 |
-| ----------------------- | ------------------- | ----------------------------------------------------------------------- |
-| `identity.user`         | yes, if any producer ran | Stable principal identifier (username or key ID).                  |
-| `identity.group`        | optional            | Group or team the principal belongs to.                                 |
-| `identity.subscription` | optional            | Plan / tier (metering in praxis-proxy/ai#577 expects user/group/subscription). |
-| `identity.method`       | recommended         | How identity was established: `api_key` \| `header` \| `jwt`.            |
-| `identity.attr.<name>`  | optional            | Reserved namespace for pass-through attributes (e.g. captured `x-tenant-*`). |
+| Key                     | Required                 | Meaning                                                                         |
+| ----------------------- | ------------------------ | ------------------------------------------------------------------------------- |
+| `identity.user`         | yes, if any producer ran | Stable principal identifier (username or key ID).                               |
+| `identity.group`        | optional                 | Group or team the principal belongs to.                                         |
+| `identity.subscription` | optional                 | Plan / tier (metering in praxis-proxy/ai#577 expects user/group/subscription).  |
+| `identity.method`       | recommended              | How identity was established: `api_key` \| `header` \| `jwt`.                   |
+| `identity.attr.<name>`  | optional                 | Reserved namespace for pass-through attributes (e.g. captured `x-tenant-*`).    |
 
 ## 3. Value format
 
