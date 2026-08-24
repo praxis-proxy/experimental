@@ -29,6 +29,7 @@ docker run --rm -p 8080:8080 \
   -v "$PWD/examples/configs/gateway.yaml:/etc/praxis/praxis.yaml:ro" \
   praxis-experimental:local
 ```
+
 The config is read from `/etc/praxis/praxis.yaml`, which is the image's
 working directory.
 
@@ -47,6 +48,7 @@ curl -X POST http://localhost:8080/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}'
 ```
+
 A `via: 1.1 praxis` response header confirms it went through the gateway.
 
 ### Pointing at a real provider
@@ -88,6 +90,20 @@ cluster and credentials.
 
 Verified by killing the primary mid-run: requests continued to be served from
 the secondary with no client-visible error.
+
+### Guardrails (Lakera Guard)
+
+Uncomment the `safety-check` chain, then add it to the listener ahead of
+`main`: `filter_chains: [safety-check, main]`. Set `LAKERA_API_KEY` in the
+environment. Request bodies are screened before they reach the provider;
+flagged requests get a 403 and never touch the upstream.
+
+This one runs as its own chain rather than an inline filter, so it can
+terminate a request early.
+
+Verified against a local stub standing in for the Lakera API: a `flagged`
+verdict returned 403 with the backend untouched, and a clean verdict passed
+through to the backend.
 
 ### Guardrails (NeMo)
 

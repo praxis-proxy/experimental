@@ -33,13 +33,19 @@ praxis-experimental-filters = { path = "../praxis-experimental-filters" }
 # Praxis core (crates.io) — for constructing the SubRequestClient that
 # `build_full_registry` requires. Keep the 0.5.x line in lockstep with the
 # git-pinned praxis-ai-proxy crate below so `FilterRegistry` unifies.
-praxis-filter = { version = "0.5.2", package = "praxis-proxy-filter" }
-praxis-core = { version = "0.5.2", package = "praxis-proxy-core" }
+praxis-filter = { version = "0.5.3", package = "praxis-proxy-filter" }
+praxis-core = { version = "0.5.3", package = "praxis-proxy-core" }
 
 # The stock praxis-ai server. Pinned to an exact commit because praxis-ai crates
 # are `publish = false` (git dependency only) and move fast; bump deliberately.
-praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "2d07c828e64e4f1f0bd80297478a6d19648c0cf3" }
+#
+# `http-callout-filter` is off by default upstream because its config surface is
+# still moving. This image exists to expose experimental work, so it is on here
+# — it is what backs the Lakera Guard example config.
+praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "45c075190c646c4e0397b29df9d944b7e49ed039", features = [
+  "http-callout-filter",
+] }
 
 [build-dependencies]
 cargo_metadata = "0.23.1"
-praxis-ai-build-support = { git = "https://github.com/praxis-proxy/ai", rev = "2d07c828e64e4f1f0bd80297478a6d19648c0cf3" }
+praxis-ai-build-support = { git = "https://github.com/praxis-proxy/ai", rev = "45c075190c646c4e0397b29df9d944b7e49ed039" }

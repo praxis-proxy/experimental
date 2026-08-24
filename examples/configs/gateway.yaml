@@ -109,6 +109,68 @@ filter_chains:
             #     sni: api.openai.com
 
   # -------------------------------------------------------------------------
+  # Guardrails — Lakera Guard  (uncomment this chain, then add it to the
+  #                             listener: `filter_chains: [safety-check, main]`)
+  # -------------------------------------------------------------------------
+  # Screens each request body through Lakera Guard before it reaches the
+  # provider. Flagged requests are rejected with 403; clean ones continue.
+  #
+  # Unlike ai_guardrails above, this is a separate chain rather than an inline
+  # filter — it runs ahead of `main` and terminates flagged requests early.
+  #
+  # target.body uses JSONPath to send only the messages array, stripping
+  # fields like "model" that Lakera rejects. The full body still reaches the
+  # provider untouched.
+  #
+  # Requires LAKERA_API_KEY in the environment (docker run -e LAKERA_API_KEY=...).
+  #
+  # - name: safety-check
+  #   filters:
+  #     - filter: http_callout
+  #       target:
+  #         url: "https://api.lakera.ai/v2/guard"
+  #         # Reject at request time if the host ever resolves to a private or
+  #         # loopback address (SSRF / DNS-rebinding hardening). Set true only
+  #         # when deliberately pointing at a loopback or sidecar guard.
+  #         allow_private_addresses: false
+  #         timeout: "2s"
+  #         headers:
+  #           - name: "Authorization"
+  #             value: "Bearer ${LAKERA_API_KEY}"
+  #           - name: "Content-Type"
+  #             value: "application/json"
+  #         body:
+  #           messages: "$.messages"
+  #       request:
+  #         phase: request_body
+  #         max_body_bytes: 1048576
+  #       response:
+  #         extract:
+  #           - json_path: "$.flagged"
+  #             result_key: "flagged"
+  #       on_failure: closed
+  #       status_on_error: 403
+  #       circuit_breaker:
+  #         failure_threshold: 5
+  #         recovery_timeout: "30s"
+  #       conditions:
+  #         - when:
+  #             methods: [POST]
+  #       branch_chains:
+  #         - name: block_flagged
+  #           on_result:
+  #             filter: http_callout
+  #             key: flagged
+  #             result: "true"
+  #           rejoin: terminal
+  #           chains:
+  #             - name: reject_flagged
+  #               filters:
+  #                 - filter: static_response
+  #                   status: 403
+  #                   body: "request blocked by content safety"
+
+  # -------------------------------------------------------------------------
   # Provider fallback  (uncomment this chain, then point the listener at it
   #                     by changing `filter_chains: [main]` to `[failover]`)
   # -------------------------------------------------------------------------

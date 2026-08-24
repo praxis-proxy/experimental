@@ -24,4 +24,4 @@ serde_yaml = { package = "yaml_serde", version = "0.10.4" }
 # Praxis core (crates.io). Keep in lockstep with praxis-proxy/ai's pins so the
 # `FilterRegistry` type unifies to a single version across this workspace and the
 # git-pinned praxis-ai-proxy server crate.
-praxis-filter = { version = "0.5.2", package = "praxis-proxy-filter" }
+praxis-filter = { version = "0.5.3", package = "praxis-proxy-filter" }
