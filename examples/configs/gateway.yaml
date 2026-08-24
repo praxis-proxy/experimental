@@ -11,7 +11,7 @@
 #     -v "$PWD/gateway.yaml:/etc/praxis/praxis.yaml:ro" \
 #     ghcr.io/praxis-proxy/experimental:latest
 #
-# See INSTALL.md for the full walkthrough.
+# See docs/gateway-quickstart.md for the full walkthrough.
 
 # ---------------------------------------------------------------------------
 # Admin
@@ -44,7 +44,8 @@ filter_chains:
       # Note: it resolves counts in the response-BODY phase, which runs
       # after response headers have already been sent downstream. So for
       # body-reporting providers the Praxis-Token-* headers do not appear.
-      # The counts are still in metadata, and still show in the access log.
+      # The counts land in filter metadata, where other filters can read
+      # them — access_log does not, so they are not visible in logs yet.
       # bedrock_invoke_model is the exception — it reports usage in headers.
       - filter: token_usage_headers
 

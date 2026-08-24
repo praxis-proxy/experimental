@@ -1,14 +1,14 @@
 # Experimental AI Gateway — build and run
 
-How to build the experimental gateway image. 
+How to build the experimental gateway image.
 
 Everything below was run against the image built from this repo.
 
-[ai#758]: https://github.com/praxis-proxy/ai/issues/758
-
 ## What is it?
 
-This is a version of Praxis with experimental features and filters enabled by default. To allow users to play with our feature-gated work without needing to dive into the codebase. 
+This is a version of Praxis with experimental features and filters enabled
+by default. To allow users to play with our feature-gated work without
+needing to dive into the codebase.
 
 ## Build
 
@@ -16,11 +16,13 @@ This is a version of Praxis with experimental features and filters enabled by de
 docker build -t praxis-experimental:local -f Containerfile .
 ```
 
-Podman works too, substitute `podman` throughout if it's your preferred container engine. 
+Podman works too, substitute `podman` throughout if it's your preferred
+container engine.
 
 ## Run
 
-`examples/configs/gateway.yaml` is an annotated sample config meant to be used with the experimental release.
+`examples/configs/gateway.yaml` is an annotated sample config meant to be
+used with the experimental release.
 
 ```console
 docker run --rm -p 8080:8080 \
@@ -72,7 +74,7 @@ docker run --rm -p 8080:8080 \
   praxis-experimental:local
 ```
 
-## Current Features 
+## Current Features
 
 Each commented block in the sample config has been verified to load in this
 image. Uncomment, supply what it needs, restart.
