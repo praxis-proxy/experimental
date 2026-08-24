@@ -41,6 +41,10 @@ impl HttpFilter for PlaceholderFilter {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 #[expect(clippy::allow_attributes, reason = "blanket test-module suppressions")]
 #[allow(
@@ -54,7 +58,6 @@ mod tests {
 
     use super::PlaceholderFilter;
 
-    /// The filter's advertised name matches the name it is registered under.
     #[test]
     fn name_matches_registration() {
         let filter = PlaceholderFilter;
@@ -65,7 +68,6 @@ mod tests {
         );
     }
 
-    /// `from_config` ignores its configuration and yields a working filter.
     #[test]
     fn from_config_ignores_configuration() {
         let config = serde_yaml::from_str("anything: ignored").expect("test YAML should parse");
@@ -77,8 +79,6 @@ mod tests {
         );
     }
 
-    /// `from_config` also accepts an empty mapping, which is what a bare
-    /// `- filter: experimental_placeholder` entry deserializes to.
     #[test]
     fn from_config_accepts_empty_mapping() {
         let config = serde_yaml::from_str("{}").expect("empty mapping should parse");
@@ -88,8 +88,6 @@ mod tests {
         );
     }
 
-    /// The macro-generated `register_filters` makes the placeholder discoverable
-    /// in a `FilterRegistry`, mirroring what praxis-ai's discovery does.
     #[test]
     fn placeholder_is_registered() {
         let mut registry = FilterRegistry::with_builtins();
