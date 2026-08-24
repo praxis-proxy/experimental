@@ -1,0 +1,161 @@
+# Praxis Experimental AI Gateway — sample configuration
+#
+# Everything OUTSIDE the commented blocks works as-is: start the image with
+# this file and you have a working gateway in front of one provider.
+#
+# Everything INSIDE the commented blocks has been verified to load in this
+# image. Uncomment a block, supply the endpoint or credential it names, and
+# restart. Nothing here is aspirational — if it is in this file, it works.
+#
+#   docker run --rm -p 8080:8080 \
+#     -v "$PWD/gateway.yaml:/etc/praxis/praxis.yaml:ro" \
+#     ghcr.io/praxis-proxy/experimental:latest
+#
+# See INSTALL.md for the full walkthrough.
+
+# ---------------------------------------------------------------------------
+# Admin
+# ---------------------------------------------------------------------------
+# Health, readiness, and metrics. Must bind loopback unless
+# insecure_options.allow_public_admin is set, so it is reachable from inside
+# the container only:
+#
+#   docker exec <container> wget -qO- http://127.0.0.1:9901/healthy
+#   docker exec <container> wget -qO- http://127.0.0.1:9901/metrics
+
+admin:
+  address: "127.0.0.1:9901"
+
+listeners:
+  - name: gateway
+    address: "0.0.0.0:8080"
+    filter_chains:
+      - main
+
+filter_chains:
+  - name: main
+    filters:
+      # -----------------------------------------------------------------
+      # Token accounting  (on by default)
+      # -----------------------------------------------------------------
+      # token_count parses usage out of the provider's response body and
+      # writes token.input / token.output / token.total to filter metadata.
+      #
+      # Note: it resolves counts in the response-BODY phase, which runs
+      # after response headers have already been sent downstream. So for
+      # body-reporting providers the Praxis-Token-* headers do not appear.
+      # The counts are still in metadata, and still show in the access log.
+      # bedrock_invoke_model is the exception — it reports usage in headers.
+      - filter: token_usage_headers
+
+      - filter: token_count
+        provider: openai # openai | anthropic | google | bedrock | azure
+
+      # -----------------------------------------------------------------
+      # Guardrails — NeMo  (uncomment to enable)
+      # -----------------------------------------------------------------
+      # Screens every request against a NeMo Guardrails service before it
+      # reaches the provider. Blocked or modified verdicts return 403.
+      #
+      # Requires a reachable NeMo endpoint. Request-side only: setting
+      # phase.response: true is rejected at startup, deliberately, because
+      # response-side evaluation is not implemented yet (praxis-proxy/ai#580).
+      #
+      # - filter: ai_guardrails
+      #   provider:
+      #     type: nemo
+      #     endpoint: "http://127.0.0.1:3001/v1/guardrail/checks"
+      #     timeout_ms: 5000
+      #   phase:
+      #     request: true
+      #     response: false
+
+      # -----------------------------------------------------------------
+      # Access log
+      # -----------------------------------------------------------------
+      - filter: access_log
+
+      # -----------------------------------------------------------------
+      # Routing
+      # -----------------------------------------------------------------
+      - filter: router
+        routes:
+          - path_prefix: "/"
+            cluster: provider
+
+      # -----------------------------------------------------------------
+      # Provider credentials  (uncomment to enable)
+      # -----------------------------------------------------------------
+      # Injects an upstream API key so clients never hold provider
+      # credentials. Prefer env_var over an inline value; the container
+      # reads it at startup (docker run -e OPENAI_API_KEY=...).
+      #
+      # - filter: credential_injection
+      #   clusters:
+      #     - name: provider
+      #       header: Authorization
+      #       header_prefix: "Bearer "
+      #       env_var: OPENAI_API_KEY
+      #       strip_client_credential: true
+
+      - filter: load_balancer
+        clusters:
+          - name: provider
+            endpoints:
+              - "127.0.0.1:3000"
+            # For a real HTTPS provider, replace the endpoint above and add:
+            #   tls:
+            #     sni: api.openai.com
+
+  # -------------------------------------------------------------------------
+  # Provider fallback  (uncomment this chain, then point the listener at it
+  #                     by changing `filter_chains: [main]` to `[failover]`)
+  # -------------------------------------------------------------------------
+  # Tries a primary provider and retries against a second when the primary
+  # returns a retryable status. Each step carries its own cluster,
+  # credentials, and endpoints, so the two providers stay isolated.
+  #
+  # - name: failover
+  #   filters:
+  #     - filter: iterative_request_router
+  #       initial_step: primary
+  #       steps:
+  #         - name: primary
+  #           filters:
+  #             - filter: router
+  #               routes:
+  #                 - path_prefix: "/"
+  #                   cluster: primary-provider
+  #             - filter: load_balancer
+  #               clusters:
+  #                 - name: primary-provider
+  #                   endpoints:
+  #                     - "127.0.0.1:3000"
+  #           on_result:
+  #             - status: [429, 502, 503, 504]
+  #               next: secondary
+  #             - default: true
+  #               done: true
+  #         - name: secondary
+  #           filters:
+  #             - filter: router
+  #               routes:
+  #                 - path_prefix: "/"
+  #                   cluster: secondary-provider
+  #             - filter: load_balancer
+  #               clusters:
+  #                 - name: secondary-provider
+  #                   endpoints:
+  #                     - "127.0.0.1:3001"
+  #           on_result:
+  #             - default: true
+  #               done: true
+
+# ---------------------------------------------------------------------------
+# Local backends
+# ---------------------------------------------------------------------------
+# Required only because the endpoints above are private addresses. Remove
+# this when pointing at real provider hostnames over TLS.
+
+insecure_options:
+  allow_private_endpoints: true
