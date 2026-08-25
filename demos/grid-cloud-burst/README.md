@@ -1,6 +1,6 @@
 <!-- markdownlint-disable MD001 MD025 MD060 -->
 
-# Praxis Grid Adaptive Cloud Bursting — narrated recording
+# Praxis Grid Adaptive Cloud Bursting
 
 [Recorded demo](https://github.com/user-attachments/assets/6cb33a69-288d-4195-8f80-c6bc537f2d41)
 
