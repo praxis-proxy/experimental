@@ -207,9 +207,11 @@ kubectl -n trl-demo port-forward svc/gateway-b 8081:8080 &
 kubectl -n trl-demo port-forward svc/dashboard 3000:3000 &
 ```
 
-Docker users can drop `KIND_EXPERIMENTAL_PROVIDER=podman` and swap in
-`docker save`/`docker load` for the equivalent `podman` commands. Tear
-down with `KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name
+Docker users can drop `KIND_EXPERIMENTAL_PROVIDER=podman` and replace the
+`podman save` + `kind load image-archive` steps with `kind load
+docker-image docker.io/library/praxis-ai-trl-demo:local --name trl-demo`
+(loads directly from Docker's image store, no tar file needed). Tear down
+with `KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name
 trl-demo` when done.
 
 ## Validate the request flow
