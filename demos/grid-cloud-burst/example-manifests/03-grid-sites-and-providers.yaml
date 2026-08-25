@@ -1,0 +1,75 @@
+# Rendered by scripts/apply-static-grid-resources.sh.
+# The gateway addresses and trust fingerprint are discovered from the current
+# Kind cluster; this template contains no credentials.
+apiVersion: grid.praxis-proxy.io/v1alpha1
+kind: GridSite
+metadata:
+  name: static-__SITE__
+  namespace: grid-system
+  labels: { grid.praxis-proxy.io/provider-site: static-__SITE__ }
+spec:
+  gridNetworkRef: grid-token-rate-limit
+  region: west
+  zone: west-1
+  egress:
+    address: __GATEWAY_IP__:8443
+    tls: { mode: Mutual, serverName: west.grid.internal }
+  trust:
+    canonicalFingerprints: ["__WEST_FINGERPRINT__"]
+---
+apiVersion: grid.praxis-proxy.io/v1alpha1
+kind: InferenceProvider
+metadata:
+  name: static-__SITE__
+  namespace: grid-system
+spec:
+  gridNetworkRef: grid-token-rate-limit
+  providerKind: llm-d-inference-sim
+  backendKind: local
+  endpoint: http://static-sim-__SITE__.grid-system.svc.cluster.local:8000
+  capacityWeight: __WEIGHT__
+  models: [{ name: gpt-4o-mini, capabilities: [text_generation], contextWindow: 4096 }]
+  siteSelector: { matchLabels: { grid.praxis-proxy.io/provider-site: static-__SITE__ } }
+  accessPolicy: { siteSelector: { matchLabels: {} } }
+  metricsConfig:
+    metricsEndpoint: http://static-sim-__SITE__.grid-system.svc.cluster.local:8000
+    path: /metrics
+    queueCapacity: 10
+    signalNames: { queueDepth: vllm:num_requests_waiting }
+    timeout: 2s
+  healthCheck: { path: /health, interval: 5s, timeout: 2s }
+---
+apiVersion: grid.praxis-proxy.io/v1alpha1
+kind: GridSite
+metadata:
+  name: static-openai-__SITE__
+  namespace: grid-system
+  labels: { grid.praxis-proxy.io/provider-site: static-openai-__SITE__ }
+spec:
+  gridNetworkRef: grid-token-rate-limit
+  region: external-cloud
+  zone: openai-__SITE__
+  egress:
+    address: __GATEWAY_IP__:8443
+    tls: { mode: Mutual, serverName: west.grid.internal }
+  trust:
+    canonicalFingerprints: ["__WEST_FINGERPRINT__"]
+---
+apiVersion: grid.praxis-proxy.io/v1alpha1
+kind: InferenceProvider
+metadata:
+  name: static-openai-__SITE__
+  namespace: grid-system
+spec:
+  gridNetworkRef: grid-token-rate-limit
+  providerKind: openai
+  backendKind: api_provider
+  # The provider gateway owns the real api.openai.com hop. The simulator is
+  # only the bounded in-cluster health target used before the live cloud phase.
+  endpoint: http://static-sim-__SITE__.grid-system.svc.cluster.local:8000
+  capacityWeight: __OPENAI_WEIGHT__
+  models: [{ name: gpt-4o-mini, capabilities: [text_generation], contextWindow: 4096 }]
+  siteSelector: { matchLabels: { grid.praxis-proxy.io/provider-site: static-openai-__SITE__ } }
+  accessPolicy: { siteSelector: { matchLabels: {} } }
+  auth: { manual: true, strategy: bearer_token, secretRef: { name: openai-api-key, namespace: grid-system, key: token } }
+  healthCheck: { path: /v1/models, interval: 30s, timeout: 5s }

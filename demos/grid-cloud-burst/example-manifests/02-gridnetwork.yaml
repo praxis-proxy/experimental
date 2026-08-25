@@ -1,0 +1,76 @@
+# GridNetwork policy for the cloud-burst topology.
+#
+# Bursting is NOT a dedicated switch — it emerges from composing independent
+# policies:
+#
+#   scoringPolicy: queueDepth   -> admission derives from live queue pressure.
+#   admissionPolicy: stabilized -> a local provider whose queue crosses
+#                                  enterThreshold (0.85) becomes existing_only
+#                                  and stops taking new traffic; it recovers only
+#                                  after dropping below exitThreshold (0.70).
+#   selectionPolicy: weightedRandom + placementPolicy: static
+#                               -> traffic is split within the active group by each
+#                                  provider's capacityWeight.
+#   routingPolicy: geographyFirst + provider backend class
+#                               -> the local pool (backendKind: local) is the
+#                                  preferred group; the overflow provider
+#                                  (backendKind: api_provider) sits in a separate
+#                                  fallback group and only serves NEW traffic once
+#                                  every local provider is existing_only.
+#
+# Note: admissionPolicy.missingMetrics defaults to existingOnly (fail-closed).
+# Elastic overflow providers (backendKind api_provider / cloud_managed) have no
+# local queue metric and are kept admissible by backend class, so the overflow
+# tier is always ready to receive burst traffic.
+apiVersion: grid.praxis-proxy.io/v1alpha1
+kind: GridNetwork
+metadata:
+  name: grid-token-rate-limit          # shared demo network name; reused by the other manifests
+  namespace: grid-system
+spec:
+  gridId: grid-token-rate-limit-v1
+  region: west
+  zone: west-1
+
+  routingPolicy: geographyFirst        # geographyFirst | scoreFirst
+  scoringPolicy:
+    strategy: queueDepth               # noMetrics | queueDepth | kvCachePressure
+  selectionPolicy:
+    mode: weightedRandom               # deterministic | roundRobin | random | weightedRandom
+  placementPolicy:
+    strategy: static                   # equal | static | pressureWeighted
+                                       # static  -> distribute by each provider's capacityWeight
+                                       # pressureWeighted -> rebalance locals by live queueDepth
+                                       #                     before any overflow is used
+
+  admissionPolicy:
+    mode: stabilized                   # instantaneous | stabilized
+    missingMetrics: existingOnly       # existingOnly | excluded (fail-closed for missing metrics)
+    pressure:
+      enterThreshold: 0.85
+      exitThreshold: 0.70
+      failureThreshold: 2              # consecutive pressured samples before existing_only
+      successThreshold: 3              # consecutive healthy samples before recovery
+      minimumStateDuration: 10s
+      recoveryHoldDown: 30s
+
+  metricsRefreshInterval: "10s"
+
+  swim:
+    probeInterval: "5s"
+    suspicionTimeout: "15s"
+    gossipNodes: 3
+
+  gatewayRefs:
+    - name: consumer-gateway
+      namespace: grid-system
+      localSiteName: west
+
+  # Operator generates material when absent; refs shown for a self-managed setup.
+  tls:
+    caSecretRef:
+      name: consumer-gateway-tls
+      namespace: grid-system
+    siteSecretRef:
+      name: consumer-gateway-tls
+      namespace: grid-system
