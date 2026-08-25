@@ -102,6 +102,7 @@ Grid is the asynchronous policy plane. Praxis is the fast local execution
 plane.
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart TB
     subgraph CP["Grid control / policy plane"]
         D["Discover<br/>providers"]
@@ -156,6 +157,7 @@ The demo treats routing as a composition of independent policies:
 | **Token policy** | How is a user or workload's token consumption governed? |
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart TB
     H["Hard constraints<br/>health, trust, capability,<br/>freshness, policy"]
     A["Admission<br/>may provider receive traffic?"]
@@ -199,6 +201,7 @@ Qwen West
 while still participating in the same active regional group.
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart TB
     E["Qwen East<br/>site: east<br/>region: region-a"]
     W["Qwen West<br/>site: west<br/>region: region-a"]
@@ -234,6 +237,7 @@ Those remain separate policies.
 One hot provider should not make the entire preferred tier look saturated.
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart TB
     M["Per-provider<br/>pressure + capacity"]
     R["Rebalance traffic<br/>inside preferred tier"]
@@ -290,6 +294,7 @@ The target behavior has three stages:
    handles eligible new traffic.
 
 ```mermaid
+%%{init: {"htmlLabels": false}}%%
 stateDiagram-v2
     [*] --> LocalOnly
 
@@ -333,6 +338,7 @@ How much new traffic should this eligible provider receive?
 ```
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart TB
     P["Provider<br/>metrics"]
     A{"Admission<br/>state"}
@@ -375,6 +381,7 @@ new selections.
 Pressure-aware placement should be damped.
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart TB
     M["Raw queue /<br/>KV pressure"]
     C["Convert to<br/>available capacity"]
@@ -421,6 +428,7 @@ WHERE should that overflow traffic go?
 ```
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart TB
     T["Total new<br/>traffic"]
     B["Burst policy<br/>70% preferred<br/>30% overflow"]
@@ -497,6 +505,7 @@ Overflow placement
 ```
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart TB
     Q["Aggregate queue /<br/>capacity pressure"]
     KV["KV-cache<br/>pressure"]
@@ -525,51 +534,6 @@ Praxis does not need to understand which signals produced the final weights.
 
 ---
 
-# User story: scale to dozens of provider pools
-
-> **As a fleet operator, I want the policy model to work for dozens of
-> Kubernetes inference pools without pairwise comparisons or a centralized
-> request coordinator.**
-
-The scalable question is not whether any provider is overloaded. It is:
-
-> **After redistributing traffic across admitted preferred providers, how much
-> usable preferred-tier headroom remains?**
-
-```mermaid
-flowchart TB
-    subgraph F["Preferred inference tier"]
-        P1["Pool 1<br/>hot"]
-        P2["Pool 2<br/>moderate"]
-        P3["Pool 3<br/>cool"]
-        POOLN["Pool N"]
-    end
-
-    E["Evaluate each pool<br/>admission + pressure<br/>+ relative capacity"]
-    W["Compute preferred-tier<br/>traffic weights"]
-    H["Aggregate residual<br/>preferred headroom"]
-    B{"Overflow<br/>needed?"}
-    L["Keep traffic<br/>preferred"]
-    O["Allocate bounded<br/>overflow"]
-
-    P1 --> E
-    P2 --> E
-    P3 --> E
-    POOLN --> E
-
-    E --> W --> H --> B
-    B -->|no| L
-    B -->|yes| O
-```
-
-Each provider can be evaluated once, making the control-plane calculation
-conceptually linear in the number of provider pools.
-
-One hot provider does not automatically create cloud spend if the rest of the
-preferred fleet has enough headroom.
-
----
-
 # User story: scale to many Praxis gateways
 
 > **As a networking operator, I want many Praxis gateways to execute the same
@@ -578,6 +542,7 @@ preferred fleet has enough headroom.
 Grid publishes routing state by routing perspective.
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart TB
     O["Versioned routing<br/>snapshot"]
 
@@ -611,6 +576,7 @@ separate from routing selection state.
 The demo uses shared token state separately from routing.
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart TB
     R["Request"]
     I["Trusted user /<br/>workload identity"]
@@ -713,6 +679,7 @@ token allocation state
 ```
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart TB
     T["Provider + Praxis<br/>telemetry"]
     O["Observability<br/>store"]
@@ -796,21 +763,6 @@ A representative run is:
 
 ---
 
-# Generation assets
-
-The slides, narration, recording, TTS helper, assembly scripts, and Playwright
-review are maintained in the Traffic Theater implementation:
-
-[Traffic Theater demo implementation](https://github.com/nerdalert/traffic-theater/tree/feat/reusable-recording-toolkit/examples/grid-cloud-burst)
-
-That directory contains the reproducible production manifest and generated-video
-workflow.
-
-This Experimental directory contains the narrated-demo link, this README, and
-the accompanying policy architecture document.
-
----
-
 # Build inputs
 
 The burst-routing work used for the current demo is composed from the following
@@ -834,66 +786,5 @@ be interpreted as statements that every behavior described in the broader
 architecture document has already merged upstream.
 
 ---
-
-# Architectural summary
-
-```mermaid
-flowchart TB
-    subgraph OBS["Observe"]
-        H["Health +<br/>freshness"]
-        Q["Queue<br/>pressure"]
-        KV["KV-cache<br/>pressure"]
-        TU["Token<br/>usage"]
-        C["Future<br/>cost"]
-    end
-
-    subgraph GRID["Grid decides asynchronously"]
-        A["Eligibility +<br/>admission"]
-        G["Active-group<br/>policy"]
-        P["Preferred-tier<br/>placement"]
-        B["Burst<br/>allocation"]
-        O["Overflow-tier<br/>placement"]
-    end
-
-    subgraph PUB["Versioned state"]
-        RO["Routing<br/>snapshot"]
-        TP["Token<br/>policy"]
-    end
-
-    subgraph PRAXIS["Praxis executes locally"]
-        ID["Trusted<br/>identity"]
-        TL["Token<br/>accounting"]
-        AF["Affinity"]
-        FG["First viable<br/>group"]
-        PS["Local provider<br/>selection"]
-    end
-
-    subgraph SERVE["Serve"]
-        KP["Kubernetes<br/>inference"]
-        CP["External model<br/>provider"]
-    end
-
-    H --> A
-    Q --> A
-    Q --> P
-    KV --> P
-    C --> O
-
-    A --> G --> P --> B --> O --> RO
-    TU --> TP
-
-    RO --> FG
-    TP --> TL
-
-    ID --> TL --> AF --> FG --> PS
-    PS --> KP
-    PS --> CP
-```
-
-The through-line is:
-
-> **Grid observes and composes policy. Grid publishes versioned execution state.
-> Praxis executes that state locally. Telemetry feeds the next policy decision
-> instead of becoming a synchronous dependency of the current request.**
 
 <!-- markdownlint-enable MD001 MD025 MD060 -->
