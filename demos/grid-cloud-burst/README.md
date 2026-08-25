@@ -61,7 +61,7 @@ are maintained in the Traffic Theater implementation:
 [Traffic Theater demo implementation](https://github.com/nerdalert/traffic-theater/tree/feat/reusable-recording-toolkit/examples/grid-cloud-burst)
 
 That directory contains the reproducible production manifest and the generated-video
-workflow. This Experimental directory intentionally contains only this README and the
+workflow. This Experimental directory contains only this README and the
 recorded-demo link.
 
 ## Build inputs
@@ -82,5 +82,6 @@ The composed deployment used for the recording is built from these branches:
   [`nerdalert/praxis-tracing`](https://github.com/nerdalert/praxis-tracing/tree/burst-routing-v1),
   branch `burst-routing-v1`.
 
-The two Praxis feature branches are composed into the gateway build as required by
-the selected AI branch. Do not replace these pins with unrelated main-branch builds.
+The two Praxis feature branches are composed into the gateway build as required
+by the selected AI branch. Do not replace these pins with unrelated main-branch
+builds.
