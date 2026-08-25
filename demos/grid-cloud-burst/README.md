@@ -20,6 +20,35 @@ This demo presents Praxis Grid intelligent overflow routing for Kubernetes:
 5. **Live recording** — normal traffic, pressure, burst, and recovery.
 6. **Outro** — Grid remains off the request hot path.
 
+## Architecture shown
+
+```text
+Kubernetes provider health and metrics
+                |
+                v
+          Grid control plane
+  discover -> observe -> admit -> group
+       -> place -> burst -> publish
+                |
+                v
+       versioned routing snapshot
+                |
+                v
+        request gateway
+ authenticate -> token policy -> snapshot
+       -> affinity -> local selection
+                |
+                v
+        selected provider gateway
+                |
+                v
+          inference backend
+```
+
+Grid computes policy asynchronously. The request gateway uses the accepted snapshot
+locally; there is no request-time call to Grid, Kubernetes, metrics systems, or
+inference schedulers.
+
 The recording is backed by a Kubernetes deployment with consumer gateways, local
 inference-simulation providers, shared token state, external capacity, and observed
 OpenTelemetry routing evidence.
