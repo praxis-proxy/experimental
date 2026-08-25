@@ -1,9 +1,0 @@
-The second idea is reactive burst routing. Local inference capacity is the preferred tier, and external capacity is used only for the residual demand that local providers cannot safely absorb.
-
-If one local pool becomes hot while other pools still have headroom, Grid does not immediately send everything outside the cluster. It reduces new traffic to the pressured pool and lets the available local pools absorb more work.
-
-The policy can progress from one hundred percent local under healthy conditions, to a small external share under moderate pressure, to a larger share as pressure increases. If no local provider can accept new work, external capacity can become the complete fallback for new requests.
-
-This progression is important because a single hot provider is not the same as a saturated provider tier. The decision uses the available headroom of the preferred tier, not just the state of one pool.
-
-When pressure clears, the external share ramps down and local providers become preferred again. Existing sessions can remain on their valid provider while new sessions follow the recovered policy.
