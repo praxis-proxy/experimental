@@ -2,7 +2,9 @@
 
 # Praxis Grid Adaptive Cloud Bursting
 
-[Recorded demo](https://github.com/user-attachments/assets/6cb33a69-288d-4195-8f80-c6bc537f2d41)
+<!-- markdownlint-disable MD034 -->
+https://github.com/user-attachments/assets/6cb33a69-288d-4195-8f80-c6bc537f2d41
+<!-- markdownlint-enable MD034 -->
 
 This demo presents **Praxis Grid adaptive inference routing and cloud
 bursting for Kubernetes**.
