@@ -540,7 +540,7 @@ flowchart TB
         P1["Pool 1<br/>hot"]
         P2["Pool 2<br/>moderate"]
         P3["Pool 3<br/>cool"]
-        PN["Pool N"]
+        POOLN["Pool N"]
     end
 
     E["Evaluate each pool<br/>admission + pressure<br/>+ relative capacity"]
@@ -553,7 +553,7 @@ flowchart TB
     P1 --> E
     P2 --> E
     P3 --> E
-    PN --> E
+    POOLN --> E
 
     E --> W --> H --> B
     B -->|no| L
