@@ -1,0 +1,9 @@
+Praxis Grid Intelligent Overflow Routing begins with a simple separation between policy and execution.
+
+The control and policy plane discovers providers, observes health and capacity, consumes Kubernetes inference queue signals, applies admission and locality policy, forms active and fallback groups, computes placement and overflow allocation, and publishes a versioned routing snapshot.
+
+The fast request path is intentionally smaller. It authenticates the request, applies token policy, reads the local snapshot, preserves valid session affinity, selects from the active provider group, and forwards to the selected provider.
+
+Grid can make distributed decisions without turning each inference request into a distributed control-plane transaction. The gateway does not call Grid, Kubernetes, the metrics system, or the inference scheduler for every request. It executes the last accepted snapshot from local memory.
+
+That boundary is the foundation for the rest of the demo. Provider conditions can change continuously, but request execution stays predictable. A new policy is computed asynchronously, published as a new revision, accepted by the gateway, and then used for later requests.

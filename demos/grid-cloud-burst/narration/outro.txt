@@ -1,0 +1,5 @@
+This concludes the Grid cloud-burst demonstration.
+
+We saw independent application quotas, local provider routing, queue-aware admission, external burst capacity, and recovery back to local inference providers.
+
+Grid remains off the request hot path. It observes and publishes policy; the request gateway applies the accepted snapshot locally while shared token state remains continuous across gateways and provider changes.

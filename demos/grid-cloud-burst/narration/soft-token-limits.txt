@@ -1,0 +1,11 @@
+The fourth slide shows that token governance is independent from provider routing.
+
+A request is authenticated first. Its usage is associated with a principal and logical service in a shared distributed token ledger. The ledger can span consumer gateways across sites, regions, and Kubernetes clusters while still representing one logical allocation.
+
+The request then receives a governance decision. With a soft allocation, the system can show that usage is within the allocation, approaching the allocation, or over the allocation. Over-allocation is recorded and exposed as feedback, but the request can continue under the soft policy. Hard enforcement is a separate choice that can stop a request before provider routing.
+
+The reservation is an estimate made before inference. After the response, the system reconciles the reservation against observed usage. Unused capacity can be returned, and actual overage can be recorded according to policy.
+
+The important continuity rule is that provider changes do not create a second allowance. A request served by an on-prem provider and a later request served through external overflow use the same logical quota. Likewise, a routing revision must not reset token usage, and a token-policy revision must not silently reset routing state.
+
+The live recording will show this with application cards, rolling-window charges, remaining capacity, soft-cap status, and observed request paths.
