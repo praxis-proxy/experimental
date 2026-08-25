@@ -1,0 +1,14 @@
+production:
+  id: grid-cloud-burst
+  title: Grid cloud-burst narrated demo
+  output: { width: 1920, height: 1080, fps: 30, videoCodec: h264, audioCodec: aac }
+browser: { baseUrl: http://127.0.0.1:3000, viewport: { width: 1920, height: 1080 } }
+scenes:
+  - { id: title, kind: slide, source: slides/title.html, narration: narration/title.txt }
+  - { id: reactive-burst, kind: slide, source: slides/reactive-burst.html, narration: narration/reactive-burst.txt }
+  - { id: independent-policies, kind: slide, source: slides/independent-policies.html, narration: narration/independent-policies.txt }
+  - { id: soft-token-limits, kind: slide, source: slides/soft-token-limits.html, narration: narration/soft-token-limits.txt }
+  - { id: live-demo, kind: video, source: source/grid-burst-sim.mp4, narration: narration/live-demo.txt }
+  - { id: outro, kind: slide, source: slides/outro.html, narration: narration/outro.txt }
+evidence:
+  required: [source_recording, slide_render, tts_audio, final_video, playwright_review, duration_check, pause_check]

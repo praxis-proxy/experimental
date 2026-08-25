@@ -1,0 +1,17 @@
+The live recording begins with the routing observability view. A client reaches east and west consumer gateways, which connect to provider gateways and local inference backends. An external-provider route is available as fallback. Green paths represent the preferred local tier.
+
+The initial requests go on prem. They are admitted through both consumers and reach local inference providers. The history records the consumer, admission result, remaining quota, and observed route. Quota admission happens before provider routing, so a denied request stops before a provider hop.
+
+These routes are backed by OpenTelemetry spans. The spans provide observed path, provider attribution, selection context, and serving information for the evidence shown in the UI.
+
+Below the topology are three independent application budgets. Each has its own rolling allocation, usage, remaining capacity, admitted requests, and blocked requests. Application color connects the quota card, request history, quota activity, and topology path.
+
+The cards show a reservation estimate and output-token control. Each request reserves capacity, then reconciles that reservation with observed usage. The rolling-window activity shows charges and expiry. Shared distributed backend state keeps usage consistent across consumer gateways.
+
+The governance panel highlights the soft cap. When an application exceeds its soft allocation, the request is still served and marked over allocation instead of being forcibly denied. This distributed quota can span gateways across sites, regions, and Kubernetes clusters while remaining one logical allocation.
+
+Under normal conditions, the on-prem providers are active and the external route is dormant. Queue pressure is then introduced on the local inference-simulation providers. The observed Kubernetes inference queue rises, admission changes at the threshold, and Grid publishes a new overlay without a request-time control-plane call.
+
+When local capacity cannot accept new work, the external-provider path becomes active. The request history shows the consumer, quota admission, provider gateway, external route, and endpoint, while OpenTelemetry records the selected path.
+
+Finally, pressure is removed. The queue falls, local providers become eligible again, and later requests return to the on-prem inference paths without resetting the distributed quota ledger. If token-type usage is not exposed, cost and savings remain unavailable rather than being invented.
