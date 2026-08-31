@@ -72,3 +72,34 @@ deploy time:
 
 Replace the placeholders with real values (or use the demo's render scripts)
 before applying.
+
+## Regional resilience topology used by the v2.1 recording
+
+Files `08` through `14` are a separate, larger topology. They model two
+consumer gateways, east and west provider sites, four local inference
+simulators, and an Azure OpenAI/OpenAI external provider group.
+
+| File | Purpose |
+| --- | --- |
+| `08-regional-local-pools.yaml` | Four independently controllable local simulator Deployments and Services. |
+| `09-regional-inference-providers.yaml` | Local providers with health and queue-depth admission signals. |
+| `10-openai-overflow-providers.yaml` | East and west OpenAI overflow candidates. |
+| `11-azure-overflow-providers.yaml` | Azure OpenAI provider templates with Secret references and endpoint placeholders. |
+| `12-azure-provider-gateways.yaml` | Dedicated Azure gateway Services and Deployments with mTLS and Entra token injection. |
+| `13-consumer-east-praxis.yaml` | East consumer pipeline with shared soft quota and all provider-hop clusters. |
+| `14-consumer-west-praxis.yaml` | West consumer equivalent of the same identity, quota, and routing contract. |
+| `10-observability-jaeger.yaml` | Optional Jaeger deployment for request/route inspection. |
+
+The numeric overlap at `10` is intentional: observability is optional and does
+not participate in provider ordering.
+
+This set extends an already installed Grid and Praxis environment. It does not
+create trust material, external-provider Secrets, Grid operators, overlay sync,
+or the base consumer/provider gateway deployments. Apply the local simulator
+and provider resources first, configure the gateway routes, then add Azure only
+after its direct and provider-boundary validation passes.
+
+Do not apply the `01`-`06` and `08`-`14` GridNetwork/provider sets together
+without reconciling their network names, sites, and provider policies. The
+former is the compact adaptive-burst reference; the latter reproduces the
+regional resilience recording.

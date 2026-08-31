@@ -1,0 +1,246 @@
+# Declarative consumer gateway configuration for the cloud-burst demo.
+# Includes the Azure provider-hop clusters and preserves local/OpenAI routes.
+# Demo-only basic-auth values are not production credentials; external
+# provider credentials remain Secret-backed and are never stored here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: consumer-west-config
+  namespace: grid-system
+data:
+  praxis.yaml: |
+    listeners:
+      - name: proxy
+        address: 0.0.0.0:8080
+        filter_chains:
+          - main
+    filter_chains:
+      - name: main
+        filters:
+          - filter: basic_auth
+            realm: Grid cloud-burst demo
+            strip_authorization: true
+            credentials:
+              - username: alice
+                password: alice-secret
+              - username: bob
+                password: bob-secret
+              - username: app1
+                password: app1-secret
+              - username: app2
+                password: app2-secret
+              - username: app3
+                password: app3-secret
+          # Join a valid incoming W3C trace and propagate it to the provider.
+          - filter: trace_context
+          - filter: token_rate_limit
+            enforcement: soft
+            key:
+              principal:
+                source: metadata
+                name: identity.user_id
+                onMissing: reject
+              model:
+                source: header
+                name: x-model
+                onMissing: reject
+                allowedModels:
+                  - gpt-4o-mini
+            reservationTimeout: 2m
+            backend:
+              kind: valkey
+              url: ${TOKEN_RATE_LIMIT_VALKEY_URL}
+              namespace: praxis:token-rate-limit:v1
+            limits:
+              maxKeys: 32
+              maxKeyLength: 256
+              maxActiveReservations: 16
+            rules:
+              - name: alice
+                match:
+                  metadata:
+                    identity.user_id: alice
+                estimation:
+                  strategy: fixed
+                  tokens: 5
+                token_budgets:
+                  - window: 1m
+                    capacity: 6000
+              - name: bob
+                match:
+                  metadata:
+                    identity.user_id: bob
+                estimation:
+                  strategy: fixed
+                  tokens: 5
+                token_budgets:
+                  - window: 10m
+                    capacity: 50000
+              - name: app1
+                match:
+                  metadata:
+                    identity.user_id: app1
+                estimation:
+                  strategy: fixed
+                  tokens: 20
+                token_budgets:
+                  - window: 1m
+                    capacity: 60
+              - name: app2
+                match:
+                  metadata:
+                    identity.user_id: app2
+                estimation:
+                  strategy: fixed
+                  tokens: 20
+                token_budgets:
+                  - window: 1m
+                    capacity: 60
+              - name: app3
+                match:
+                  metadata:
+                    identity.user_id: app3
+                estimation:
+                  strategy: fixed
+                  tokens: 20
+                token_budgets:
+                  - window: 1m
+                    capacity: 60
+              - name: default
+                estimation:
+                  strategy: fixed
+                  tokens: 5
+                token_budgets:
+                  - window: 10m
+                    capacity: 50000
+          - filter: json_body_field
+            field: model
+            header: X-Model
+          - filter: headers
+            response_set:
+              - name: X-Grid-Combined-Consumer-Gateway
+                value: west consumer gateway
+          - filter: intelligent_route
+            overlay_file: /etc/praxis/routing/routing-overlay.json
+            model_header: X-Model
+            provider_hop_clusters:
+              - openai-east
+              - openai-west
+              - llm-d-east-1
+              - llm-d-east-2
+              - llm-d-west-1
+              - llm-d-west-2
+              - azure-east
+              - azure-west
+            expected_overlay_scope:
+              network: grid-cloud-burst-rhoai
+              gateway: consumer-west
+              namespace: grid-system
+              local_site: west-local
+            reload:
+              enabled: true
+              debounce_ms: 500
+            session_affinity:
+              enabled: true
+              header: X-Session-Id
+              ttl_secs: 3600
+          - filter: token_count
+            provider: openai
+          - filter: load_balancer
+            clusters:
+              - name: llm-d-west-1
+                tls:
+                  ca:
+                    ca_path: /etc/praxis/tls/ca.crt
+                  client_cert:
+                    cert_path: /etc/praxis/tls/tls.crt
+                    key_path: /etc/praxis/tls/tls.key
+                  sni: provider-west.grid-system.svc
+                  verify: true
+                endpoints:
+                  - provider-west.grid-system.svc.cluster.local:8443
+              - name: llm-d-west-2
+                tls:
+                  ca:
+                    ca_path: /etc/praxis/tls/ca.crt
+                  client_cert:
+                    cert_path: /etc/praxis/tls/tls.crt
+                    key_path: /etc/praxis/tls/tls.key
+                  sni: provider-west.grid-system.svc
+                  verify: true
+                endpoints:
+                  - provider-west.grid-system.svc.cluster.local:8443
+              - name: llm-d-east-1
+                tls:
+                  ca:
+                    ca_path: /etc/praxis/tls/ca.crt
+                  client_cert:
+                    cert_path: /etc/praxis/tls/tls.crt
+                    key_path: /etc/praxis/tls/tls.key
+                  sni: provider-east.grid-system.svc
+                  verify: true
+                endpoints:
+                  - provider-east.grid-system.svc.cluster.local:8443
+              - name: llm-d-east-2
+                tls:
+                  ca:
+                    ca_path: /etc/praxis/tls/ca.crt
+                  client_cert:
+                    cert_path: /etc/praxis/tls/tls.crt
+                    key_path: /etc/praxis/tls/tls.key
+                  sni: provider-east.grid-system.svc
+                  verify: true
+                endpoints:
+                  - provider-east.grid-system.svc.cluster.local:8443
+              - name: openai-east
+                tls:
+                  ca:
+                    ca_path: /etc/praxis/tls/ca.crt
+                  client_cert:
+                    cert_path: /etc/praxis/tls/tls.crt
+                    key_path: /etc/praxis/tls/tls.key
+                  sni: provider-east.grid-system.svc
+                  verify: true
+                endpoints:
+                  - provider-east.grid-system.svc.cluster.local:8443
+              - name: openai-west
+                tls:
+                  ca:
+                    ca_path: /etc/praxis/tls/ca.crt
+                  client_cert:
+                    cert_path: /etc/praxis/tls/tls.crt
+                    key_path: /etc/praxis/tls/tls.key
+                  sni: provider-west.grid-system.svc
+                  verify: true
+                endpoints:
+                  - provider-west.grid-system.svc.cluster.local:8443
+              - name: azure-east
+                tls:
+                  ca:
+                    ca_path: /etc/praxis/tls/ca.crt
+                  client_cert:
+                    cert_path: /etc/praxis/tls/tls.crt
+                    key_path: /etc/praxis/tls/tls.key
+                  sni: provider-east.grid-system.svc
+                  verify: true
+                endpoints:
+                  - azure-east.grid-system.svc.cluster.local:8443
+              - name: azure-west
+                tls:
+                  ca:
+                    ca_path: /etc/praxis/tls/ca.crt
+                  client_cert:
+                    cert_path: /etc/praxis/tls/tls.crt
+                    key_path: /etc/praxis/tls/tls.key
+                  sni: provider-west.grid-system.svc
+                  verify: true
+                endpoints:
+                  - azure-west.grid-system.svc.cluster.local:8443
+    insecure_options:
+      allow_private_endpoints: true
+    admin:
+      address: 127.0.0.1:9901
+    shutdown_timeout_secs: 5
+    telemetry:
+      otlp_endpoint: http://jaeger-collector.grid-system.svc.cluster.local:4317
+      sampling_rate: 1.0

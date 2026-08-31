@@ -1,0 +1,195 @@
+# Template for the dedicated Azure provider gateways. Render this file with
+# the deployment script; placeholders are never valid credential values.
+# The gateway uses the same mTLS server secret as the demo gateways, while the
+# Entra client secret is injected only as AZURE_CLIENT_SECRET from a Secret.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: azure-east-config
+  namespace: grid-system
+data:
+  praxis.yaml: |
+    listeners:
+      - name: provider
+        address: 0.0.0.0:8443
+        filter_chains: [provider-inference]
+        tls:
+          certificates:
+            - cert_path: /etc/praxis/tls/tls.crt
+              key_path: /etc/praxis/tls/tls.key
+          client_ca: {ca_path: /etc/praxis/tls/ca.crt}
+          client_cert_mode: require
+    filter_chains:
+      - name: provider-inference
+        filters:
+          - filter: peer_identity_trust
+            trusted_peers: [{organization: ai-grid}]
+          - filter: provider_route
+            provider_id: azure-east
+            model_header: X-Model
+            emit_demo_attribution: true
+            routes:
+              - candidate_id: ${AZURE_EAST_CANDIDATE_ID}
+                model: gpt-4o-mini
+                provider_model: gpt-4o-mini
+                paths: [/v1/chat/completions, /v1/responses]
+                cluster: azure-upstream
+          - filter: path_rewrite
+            replace:
+              pattern: "^/v1/chat/completions/?$"
+              replacement: /openai/v1/chat/completions
+            conditions:
+              - when: {path: /v1/chat/completions, methods: [POST]}
+          - filter: azure_ad
+            tenant_id: ${AZURE_TENANT_ID}
+            client_id: ${AZURE_CLIENT_ID}
+            scope: https://cognitiveservices.azure.com/.default
+            client_secret_env_var: AZURE_CLIENT_SECRET
+          - filter: load_balancer
+            clusters:
+              - name: azure-upstream
+                http: {authority: ${AZURE_OPENAI_HOST}}
+                endpoints: [${AZURE_OPENAI_HOST}:443]
+                tls: {sni: ${AZURE_OPENAI_HOST}, verify: true}
+                idle_timeout_ms: 5000
+    insecure_options: {allow_private_endpoints: false}
+    admin: {address: 127.0.0.1:9901}
+    shutdown_timeout_secs: 5
+    telemetry:
+      otlp_endpoint: http://jaeger-collector.grid-system.svc.cluster.local:4317
+      sampling_rate: 1.0
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: azure-west-config
+  namespace: grid-system
+data:
+  praxis.yaml: |
+    listeners:
+      - name: provider
+        address: 0.0.0.0:8443
+        filter_chains: [provider-inference]
+        tls:
+          certificates:
+            - cert_path: /etc/praxis/tls/tls.crt
+              key_path: /etc/praxis/tls/tls.key
+          client_ca: {ca_path: /etc/praxis/tls/ca.crt}
+          client_cert_mode: require
+    filter_chains:
+      - name: provider-inference
+        filters:
+          - filter: peer_identity_trust
+            trusted_peers: [{organization: ai-grid}]
+          - filter: provider_route
+            provider_id: azure-west
+            model_header: X-Model
+            emit_demo_attribution: true
+            routes:
+              - candidate_id: ${AZURE_WEST_CANDIDATE_ID}
+                model: gpt-4o-mini
+                provider_model: gpt-4o-mini
+                paths: [/v1/chat/completions, /v1/responses]
+                cluster: azure-upstream
+          - filter: path_rewrite
+            replace:
+              pattern: "^/v1/chat/completions/?$"
+              replacement: /openai/v1/chat/completions
+            conditions:
+              - when: {path: /v1/chat/completions, methods: [POST]}
+          - filter: azure_ad
+            tenant_id: ${AZURE_TENANT_ID}
+            client_id: ${AZURE_CLIENT_ID}
+            scope: https://cognitiveservices.azure.com/.default
+            client_secret_env_var: AZURE_CLIENT_SECRET
+          - filter: load_balancer
+            clusters:
+              - name: azure-upstream
+                http: {authority: ${AZURE_OPENAI_HOST}}
+                endpoints: [${AZURE_OPENAI_HOST}:443]
+                tls: {sni: ${AZURE_OPENAI_HOST}, verify: true}
+                idle_timeout_ms: 5000
+    insecure_options: {allow_private_endpoints: false}
+    admin: {address: 127.0.0.1:9901}
+    shutdown_timeout_secs: 5
+    telemetry:
+      otlp_endpoint: http://jaeger-collector.grid-system.svc.cluster.local:4317
+      sampling_rate: 1.0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: azure-east
+  namespace: grid-system
+  labels: {app.kubernetes.io/instance: azure-east, app.kubernetes.io/name: praxis-gateway}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/instance: azure-east, app.kubernetes.io/name: praxis-gateway}}
+  template:
+    metadata: {labels: {app.kubernetes.io/instance: azure-east, app.kubernetes.io/name: praxis-gateway}}
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets: [{name: burst-registry-pull-current}, {name: burst-registry-pull}]
+      containers:
+        - name: praxis
+          image: ${AZURE_IMAGE}
+          args: [--config, /etc/praxis/praxis.yaml]
+          ports: [{containerPort: 8443, name: https-mtls}]
+          env:
+            - name: AZURE_CLIENT_SECRET
+              valueFrom: {secretKeyRef: {name: azure-openai-client-secret, key: client-secret}}
+          readinessProbe: {tcpSocket: {port: 8443}, initialDelaySeconds: 3, periodSeconds: 5}
+          livenessProbe: {tcpSocket: {port: 8443}, initialDelaySeconds: 5, periodSeconds: 10}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: config, mountPath: /etc/praxis, readOnly: true}
+            - {name: tls, mountPath: /etc/praxis/tls, readOnly: true}
+      volumes:
+        - {name: config, configMap: {name: azure-east-config}}
+        - {name: tls, secret: {secretName: gateway-tls}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: azure-west
+  namespace: grid-system
+  labels: {app.kubernetes.io/instance: azure-west, app.kubernetes.io/name: praxis-gateway}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/instance: azure-west, app.kubernetes.io/name: praxis-gateway}}
+  template:
+    metadata: {labels: {app.kubernetes.io/instance: azure-west, app.kubernetes.io/name: praxis-gateway}}
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets: [{name: burst-registry-pull-current}, {name: burst-registry-pull}]
+      containers:
+        - name: praxis
+          image: ${AZURE_IMAGE}
+          args: [--config, /etc/praxis/praxis.yaml]
+          ports: [{containerPort: 8443, name: https-mtls}]
+          env:
+            - name: AZURE_CLIENT_SECRET
+              valueFrom: {secretKeyRef: {name: azure-openai-client-secret, key: client-secret}}
+          readinessProbe: {tcpSocket: {port: 8443}, initialDelaySeconds: 3, periodSeconds: 5}
+          livenessProbe: {tcpSocket: {port: 8443}, initialDelaySeconds: 5, periodSeconds: 10}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: config, mountPath: /etc/praxis, readOnly: true}
+            - {name: tls, mountPath: /etc/praxis/tls, readOnly: true}
+      volumes:
+        - {name: config, configMap: {name: azure-west-config}}
+        - {name: tls, secret: {secretName: gateway-tls}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: azure-east, namespace: grid-system}
+spec:
+  selector: {app.kubernetes.io/instance: azure-east, app.kubernetes.io/name: praxis-gateway}
+  ports: [{name: https-mtls, port: 8443, targetPort: https-mtls}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: azure-west, namespace: grid-system}
+spec:
+  selector: {app.kubernetes.io/instance: azure-west, app.kubernetes.io/name: praxis-gateway}
+  ports: [{name: https-mtls, port: 8443, targetPort: https-mtls}]

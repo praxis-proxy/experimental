@@ -1,0 +1,63 @@
+# Azure OpenAI overflow providers.
+#
+# This file is intentionally a template: never commit a client secret. Render
+# the Secret value from a protected environment/secret manager, then apply it.
+# The paired provider-gateway configuration must use the azure_ad filter,
+# authority/SNI equal to the Azure resource hostname, and the Azure v1 path.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: azure-openai-client-secret
+  namespace: grid-system
+type: Opaque
+stringData:
+  client-secret: REPLACE_FROM_SECRET_MANAGER
+---
+apiVersion: grid.praxis-proxy.io/v1alpha1
+kind: InferenceProvider
+metadata:
+  name: azure-east
+  namespace: grid-system
+spec:
+  gridNetworkRef: grid-cloud-burst-rhoai
+  backendKind: api_provider
+  providerKind: azure_openai
+  # Replace the hostname with the assigned Azure OpenAI resource.
+  endpoint: https://cloudburst-aoai-nxtdv.openai.azure.com
+  routingClusterRef: azure-east
+  capacityWeight: 50
+  models:
+    - name: gpt-4o-mini
+      capabilities: [text_generation]
+      contextWindow: 4096
+  auth:
+    strategy: bearer_token
+    manual: true
+    secretRef: {name: azure-openai-client-secret, namespace: grid-system, key: client-secret}
+  siteSelector:
+    matchLabels: {grid.praxis-proxy.io/provider-site: east-cloud}
+  accessPolicy: {siteSelector: {matchLabels: {}}}
+---
+apiVersion: grid.praxis-proxy.io/v1alpha1
+kind: InferenceProvider
+metadata:
+  name: azure-west
+  namespace: grid-system
+spec:
+  gridNetworkRef: grid-cloud-burst-rhoai
+  backendKind: api_provider
+  providerKind: azure_openai
+  endpoint: https://cloudburst-aoai-nxtdv.openai.azure.com
+  routingClusterRef: azure-west
+  capacityWeight: 50
+  models:
+    - name: gpt-4o-mini
+      capabilities: [text_generation]
+      contextWindow: 4096
+  auth:
+    strategy: bearer_token
+    manual: true
+    secretRef: {name: azure-openai-client-secret, namespace: grid-system, key: client-secret}
+  siteSelector:
+    matchLabels: {grid.praxis-proxy.io/provider-site: west-cloud}
+  accessPolicy: {siteSelector: {matchLabels: {}}}

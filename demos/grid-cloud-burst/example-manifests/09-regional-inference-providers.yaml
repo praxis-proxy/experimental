@@ -1,0 +1,65 @@
+# Two local InferenceProviders per site. Use localityScope: sameSite on the
+# GridNetwork so east and west remain isolated active groups.
+apiVersion: grid.praxis-proxy.io/v1alpha1
+kind: InferenceProvider
+metadata: {name: llm-d-east-1, namespace: grid-system}
+spec:
+  gridNetworkRef: grid-cloud-burst-rhoai
+  providerKind: llm-d-inference-sim
+  backendKind: local
+  endpoint: http://llm-d-east-1.grid-system.svc.cluster.local:8000
+  routingClusterRef: llm-d-east-1
+  capacityWeight: 50
+  models: [{name: gpt-4o-mini, capabilities: [text_generation], contextWindow: 4096}]
+  siteSelector: {matchLabels: {grid.praxis-proxy.io/provider-site: east-local}}
+  accessPolicy: {siteSelector: {matchLabels: {}}}
+  metricsConfig: {metricsEndpoint: http://llm-d-east-1.grid-system.svc.cluster.local:8000, path: /metrics, queueCapacity: 10, signalNames: {queueDepth: vllm:num_requests_waiting}, timeout: 2s}
+  healthCheck: {path: /health, interval: 5s, timeout: 2s}
+---
+apiVersion: grid.praxis-proxy.io/v1alpha1
+kind: InferenceProvider
+metadata: {name: llm-d-east-2, namespace: grid-system}
+spec:
+  gridNetworkRef: grid-cloud-burst-rhoai
+  providerKind: llm-d-inference-sim
+  backendKind: local
+  endpoint: http://llm-d-east-2.grid-system.svc.cluster.local:8000
+  routingClusterRef: llm-d-east-2
+  capacityWeight: 50
+  models: [{name: gpt-4o-mini, capabilities: [text_generation], contextWindow: 4096}]
+  siteSelector: {matchLabels: {grid.praxis-proxy.io/provider-site: east-local}}
+  accessPolicy: {siteSelector: {matchLabels: {}}}
+  metricsConfig: {metricsEndpoint: http://llm-d-east-2.grid-system.svc.cluster.local:8000, path: /metrics, queueCapacity: 10, signalNames: {queueDepth: vllm:num_requests_waiting}, timeout: 2s}
+  healthCheck: {path: /health, interval: 5s, timeout: 2s}
+---
+apiVersion: grid.praxis-proxy.io/v1alpha1
+kind: InferenceProvider
+metadata: {name: llm-d-west-1, namespace: grid-system}
+spec:
+  gridNetworkRef: grid-cloud-burst-rhoai
+  providerKind: llm-d-inference-sim
+  backendKind: local
+  endpoint: http://llm-d-west-1.grid-system.svc.cluster.local:8000
+  routingClusterRef: llm-d-west-1
+  capacityWeight: 50
+  models: [{name: gpt-4o-mini, capabilities: [text_generation], contextWindow: 4096}]
+  siteSelector: {matchLabels: {grid.praxis-proxy.io/provider-site: west-local}}
+  accessPolicy: {siteSelector: {matchLabels: {}}}
+  metricsConfig: {metricsEndpoint: http://llm-d-west-1.grid-system.svc.cluster.local:8000, path: /metrics, queueCapacity: 10, signalNames: {queueDepth: vllm:num_requests_waiting}, timeout: 2s}
+  healthCheck: {path: /health, interval: 5s, timeout: 2s}
+---
+apiVersion: grid.praxis-proxy.io/v1alpha1
+kind: InferenceProvider
+metadata: {name: llm-d-west-2, namespace: grid-system}
+spec:
+  gridNetworkRef: grid-cloud-burst-rhoai
+  providerKind: llm-d-inference-sim
+  backendKind: local
+  endpoint: http://llm-d-west-2.grid-system.svc.cluster.local:8000
+  routingClusterRef: llm-d-west-2
+  capacityWeight: 50
+  models: [{name: gpt-4o-mini, capabilities: [text_generation], contextWindow: 4096}]
+  siteSelector: {matchLabels: {grid.praxis-proxy.io/provider-site: west-local}}
+  accessPolicy: {siteSelector: {matchLabels: {}}}
+  metricsConfig: {metricsEndpoint: http://llm-d-west-2.grid-system.svc.cluster.local:8000, path: /metrics, queueCapacity: 10, signalNames: {queueDepth: vllm:num_requests_waiting}, timeout: 2s}
+  healthCheck: {path: /health, interval: 5s, timeout: 2s}

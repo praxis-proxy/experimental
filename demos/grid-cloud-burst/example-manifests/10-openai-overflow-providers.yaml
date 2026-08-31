@@ -1,0 +1,53 @@
+# OpenAI is an overflow provider. Its InferenceProvider endpoint must describe
+# the real external backend; the provider-gateway route separately owns the
+# final-hop TLS/authority and credential injection configuration. The paired
+# provider-gateway ConfigMaps must set both tls.sni and http.authority to
+# api.openai.com; SNI alone can produce HTTP 421 from the upstream. In Praxis
+# configuration authority is nested under the cluster's http field.
+apiVersion: grid.praxis-proxy.io/v1alpha1
+kind: InferenceProvider
+metadata:
+  name: openai-east
+  namespace: grid-system
+spec:
+  gridNetworkRef: grid-cloud-burst-rhoai
+  backendKind: api_provider
+  providerKind: openai
+  endpoint: https://api.openai.com
+  routingClusterRef: openai-east
+  capacityWeight: 50
+  models:
+    - name: gpt-4o-mini
+      capabilities: [text_generation]
+      contextWindow: 4096
+  auth:
+    strategy: bearer_token
+    manual: true
+    secretRef: {name: openai-api-key, namespace: grid-system, key: token}
+  siteSelector:
+    matchLabels: {grid.praxis-proxy.io/provider-site: east-cloud}
+  accessPolicy: {siteSelector: {matchLabels: {}}}
+---
+apiVersion: grid.praxis-proxy.io/v1alpha1
+kind: InferenceProvider
+metadata:
+  name: openai-west
+  namespace: grid-system
+spec:
+  gridNetworkRef: grid-cloud-burst-rhoai
+  backendKind: api_provider
+  providerKind: openai
+  endpoint: https://api.openai.com
+  routingClusterRef: openai-west
+  capacityWeight: 50
+  models:
+    - name: gpt-4o-mini
+      capabilities: [text_generation]
+      contextWindow: 4096
+  auth:
+    strategy: bearer_token
+    manual: true
+    secretRef: {name: openai-api-key, namespace: grid-system, key: token}
+  siteSelector:
+    matchLabels: {grid.praxis-proxy.io/provider-site: west-cloud}
+  accessPolicy: {siteSelector: {matchLabels: {}}}
