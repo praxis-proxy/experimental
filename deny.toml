@@ -25,6 +25,8 @@ allow = [
   "CDLA-Permissive-2.0",
   "ISC",
   "MIT",
+  # Via Switchyard → jsonschema → referencing → fluent-uri → borrow-or-share.
+  "MIT-0",
   "Unicode-3.0",
   "Unicode-DFS-2016",
   "Unlicense",

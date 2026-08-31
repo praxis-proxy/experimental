@@ -1,0 +1,42 @@
+# switchyard_route local demo (mocks on 127.0.0.1).
+#
+# gateway :18080 → switchyard_route → judge :18091 / weak :18092 / strong :18093
+
+admin:
+  address: "127.0.0.1:19901"
+
+listeners:
+  - name: switchyard-gateway
+    address: "127.0.0.1:18080"
+    filter_chains:
+      - routing
+
+filter_chains:
+  - name: routing
+    filters:
+      - filter: switchyard_route
+        judge:
+          endpoint: "__JUDGE_ENDPOINT__"
+          model: "__JUDGE_MODEL__"
+          timeout_ms: 10000
+        threshold: 0.8
+        targets:
+          weak:
+            cluster: weak-cluster
+            model: mock-weak
+          strong:
+            cluster: strong-cluster
+            model: mock-strong
+        on_failure: open
+      - filter: load_balancer
+        clusters:
+          - name: weak-cluster
+            endpoints:
+              - "127.0.0.1:18092"
+          - name: strong-cluster
+            endpoints:
+              - "127.0.0.1:18093"
+
+# Loopback-only demo; allow_root for UID 0 CI/container shells.
+insecure_options:
+  allow_root: true
