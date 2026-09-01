@@ -149,17 +149,10 @@ data:
                     f"?follow=true&tailLines=0&timestamps=false",
                     timeout=None,
                 ) as resp:
-                    buf = b""
-                    while True:
-                        chunk = resp.read(1)
-                        if not chunk:
-                            break
-                        buf += chunk
-                        if chunk == b"\n":
-                            line = ANSI_RE.sub("", buf.decode(errors="replace")).rstrip("\n")
-                            if line:
-                                self._sse_send(line)
-                            buf = b""
+                    for raw_line in resp:
+                        line = ANSI_RE.sub("", raw_line.decode(errors="replace")).rstrip("\n")
+                        if line:
+                            self._sse_send(line)
             except (BrokenPipeError, ConnectionResetError):
                 pass
             except Exception as exc:
@@ -200,6 +193,10 @@ data:
                 status = e.code
                 resp_headers = {k.lower(): v for k, v in e.headers.items()}
                 resp_body = e.read()
+            except urllib.error.URLError as e:
+                status = 503
+                resp_headers = {}
+                resp_body = json.dumps({"error": f"gateway unreachable: {e.reason}"}).encode()
             latency_ms = (time.monotonic() - t0) * 1000
 
             try:
