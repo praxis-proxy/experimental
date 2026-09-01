@@ -1,0 +1,43 @@
+# Namespace + minimal RBAC so each app-* pod can (a) look up which real pod is
+# currently serving "gateway-a"/"gateway-b" via the Kubernetes API, instead of
+# a name invented client-side, and (b) stream that pod's real stdout via the
+# pods/log subresource (the same data `kubectl logs -f` reads), for the
+# dashboard's live gateway-log panel. Scoped to get/list Pods and get
+# Pods/log in this namespace only -- no write access, no other namespaces.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: trl-demo
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: trl-demo-app
+  namespace: trl-demo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: trl-demo-pod-reader
+  namespace: trl-demo
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: trl-demo-app-pod-reader
+  namespace: trl-demo
+subjects:
+  - kind: ServiceAccount
+    name: trl-demo-app
+    namespace: trl-demo
+roleRef:
+  kind: Role
+  name: trl-demo-pod-reader
+  apiGroup: rbac.authorization.k8s.io

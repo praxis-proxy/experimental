@@ -1,0 +1,94 @@
+# gateway-a and gateway-b: two independent replicas of the *same* image and
+# the *same* config.yaml (mounted from the `gateway-config` ConfigMap, created
+# by deploy.sh from the sibling ../config.yaml -- single source of truth,
+# same file the docker-compose version used), pointed at the same shared
+# Valkey backend. Their only relationship is sharing that image/config; each
+# runs as its own Deployment/Pod so it has its own real, independently
+# discoverable pod identity.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway-a
+  namespace: trl-demo
+  labels: { app: gateway-a }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: gateway-a }
+  template:
+    metadata:
+      labels: { app: gateway-a }
+    spec:
+      containers:
+        - name: gateway
+          image: docker.io/library/praxis-ai-trl-demo:local
+          imagePullPolicy: Never
+          args: ["-c", "/etc/praxis/config.yaml"]
+          env:
+            - name: TOKEN_RATE_LIMIT_VALKEY_URL
+              value: "redis://valkey:6379"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/praxis
+              readOnly: true
+          ports:
+            - containerPort: 8080
+      volumes:
+        - name: config
+          configMap:
+            name: gateway-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway-a
+  namespace: trl-demo
+spec:
+  selector: { app: gateway-a }
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway-b
+  namespace: trl-demo
+  labels: { app: gateway-b }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: gateway-b }
+  template:
+    metadata:
+      labels: { app: gateway-b }
+    spec:
+      containers:
+        - name: gateway
+          image: docker.io/library/praxis-ai-trl-demo:local
+          imagePullPolicy: Never
+          args: ["-c", "/etc/praxis/config.yaml"]
+          env:
+            - name: TOKEN_RATE_LIMIT_VALKEY_URL
+              value: "redis://valkey:6379"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/praxis
+              readOnly: true
+          ports:
+            - containerPort: 8080
+      volumes:
+        - name: config
+          configMap:
+            name: gateway-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway-b
+  namespace: trl-demo
+spec:
+  selector: { app: gateway-b }
+  ports:
+    - port: 8080
+      targetPort: 8080

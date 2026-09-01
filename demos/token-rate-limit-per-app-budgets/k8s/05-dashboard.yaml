@@ -1,0 +1,45 @@
+# Same-origin dashboard + reverse proxy, now fronting the app-a/b/c pods
+# (not the gateways directly) so every scenario request routes through
+# that app's own real pod. The `dashboard-assets` ConfigMap is created by
+# deploy.sh from the sibling ../dashboard/{index.html,nginx.conf} -- single
+# source of truth, same files used locally.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard
+  namespace: trl-demo
+  labels: { app: dashboard }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: dashboard }
+  template:
+    metadata:
+      labels: { app: dashboard }
+    spec:
+      containers:
+        - name: dashboard
+          image: docker.io/library/nginx:alpine
+          volumeMounts:
+            - name: assets
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: nginx.conf
+            - name: assets
+              mountPath: /usr/share/nginx/html/index.html
+              subPath: index.html
+          ports:
+            - containerPort: 3000
+      volumes:
+        - name: assets
+          configMap: { name: dashboard-assets }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard
+  namespace: trl-demo
+spec:
+  selector: { app: dashboard }
+  ports:
+    - port: 3000
+      targetPort: 3000

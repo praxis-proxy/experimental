@@ -1,0 +1,127 @@
+# Two independent Praxis AI gateway instances, sharing one Valkey-backed
+# sliding-window ledger for the token_rate_limit filter -- the "final
+# scenario" for per-app budgets (ai#129 keying + the ai#658 sliding-window
+# design), demonstrating that an app's budget is enforced consistently no
+# matter which gateway replica its traffic happens to land on.
+#
+# `PRAXIS_AI_SRC` must point at a checkout of the source branch (see
+# README.md's "Build and run" section); it's only needed to build the
+# gateway image, not at runtime.
+
+services:
+  valkey:
+    image: docker.io/valkey/valkey:8-alpine
+    command: ["valkey-server", "--save", ""]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    networks: [demo]
+
+  # Minimal OpenAI-shaped backend so admitted requests get a real 200
+  # with token usage data, exercising reservation reconciliation as well
+  # as admission/denial. `usage.total_tokens` is tier-aware (read from the
+  # `x-tier` header) and must exactly equal config.yaml's `estimate_tokens`
+  # for that tier (15 gold, 7 silver) -- see config.yaml's comment for why
+  # a mismatch silently breaks the reconciliation math.
+  backend:
+    image: docker.io/library/python:3.13-alpine
+    working_dir: /srv
+    command:
+      - python3
+      - -c
+      - |
+        import json
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        TOTAL_TOKENS_BY_TIER = {"gold": 15, "silver": 7}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                tier = self.headers.get("x-tier", "")
+                total_tokens = TOTAL_TOKENS_BY_TIER.get(tier, 10)
+                prompt_tokens = total_tokens // 2
+                body = json.dumps({
+                    "id": "demo-completion",
+                    "object": "chat.completion",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": total_tokens - prompt_tokens,
+                        "total_tokens": total_tokens,
+                    },
+                }).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                pass
+
+        HTTPServer(("0.0.0.0", 3000), Handler).serve_forever()
+    networks: [demo]
+
+  gateway-a:
+    build:
+      context: ${PRAXIS_AI_SRC:-../../../praxis-ai-trl-demo}
+      dockerfile: Containerfile
+    image: praxis-ai-trl-demo:local
+    environment:
+      TOKEN_RATE_LIMIT_VALKEY_URL: redis://valkey:6379
+    volumes:
+      - ./config.yaml:/etc/praxis/config.yaml:ro
+    command: ["-c", "/etc/praxis/config.yaml"]
+    ports:
+      - "8080:8080"
+    depends_on:
+      valkey:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    networks: [demo]
+
+  # Same image, same config, same Valkey backend as gateway-a -- an
+  # independent replica, not a hot spare. Its only relationship to
+  # gateway-a is sharing the built image tag (see README.md).
+  gateway-b:
+    image: praxis-ai-trl-demo:local
+    environment:
+      TOKEN_RATE_LIMIT_VALKEY_URL: redis://valkey:6379
+    volumes:
+      - ./config.yaml:/etc/praxis/config.yaml:ro
+    command: ["-c", "/etc/praxis/config.yaml"]
+    ports:
+      - "8081:8080"
+    depends_on:
+      valkey:
+        condition: service_healthy
+      backend:
+        condition: service_started
+      gateway-a:
+        condition: service_started
+    networks: [demo]
+
+  # Same-origin browser dashboard + reverse proxy (see dashboard/nginx.conf).
+  # Recording-only convenience: exercises the exact same HTTP contract as the
+  # curl walkthrough above, it does not participate in the filter chain.
+  dashboard:
+    image: docker.io/library/nginx:alpine
+    volumes:
+      - ./dashboard/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./dashboard/index.html:/usr/share/nginx/html/index.html:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      gateway-a:
+        condition: service_started
+      gateway-b:
+        condition: service_started
+    networks: [demo]
+
+networks:
+  demo: {}

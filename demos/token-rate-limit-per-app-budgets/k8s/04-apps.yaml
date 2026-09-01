@@ -1,0 +1,381 @@
+# app-a, app-b, app-c: each a *real*, separate pod that makes its own
+# server-side call to its gateway -- not a header value faked from one
+# browser tab. Each returns its own real pod name (from the Downward API)
+# plus the *actual current* pod name behind whichever gateway Service it
+# called, resolved live via the Kubernetes API (see 00-namespace-rbac.yaml),
+# so "which pod served this" is never invented client-side.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-script
+  namespace: trl-demo
+data:
+  app.py: |
+    import json, os, re, ssl, time, urllib.error, urllib.parse, urllib.request, uuid
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    APP_ID = os.environ["APP_ID"]
+    TIER = os.environ["TIER"]
+    POD_NAME = os.environ["POD_NAME"]
+    POD_IP = os.environ["POD_IP"]
+    NAMESPACE = os.environ["POD_NAMESPACE"]
+
+    K8S_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    K8S_CA_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+    K8S_API = "https://kubernetes.default.svc"
+    ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+    def k8s_request(path, timeout=2):
+        with open(K8S_TOKEN_PATH) as f:
+            token = f.read().strip()
+        ctx = ssl.create_default_context(cafile=K8S_CA_PATH)
+        req = urllib.request.Request(f"{K8S_API}{path}", headers={"Authorization": f"Bearer {token}"})
+        return urllib.request.urlopen(req, context=ctx, timeout=timeout)
+
+    def resolve_gateway_pod_name(gw_label):
+        try:
+            with k8s_request(
+                f"/api/v1/namespaces/{NAMESPACE}/pods?labelSelector=app%3D{gw_label}"
+            ) as resp:
+                data = json.loads(resp.read())
+            items = data.get("items", [])
+            if items:
+                return items[0]["metadata"]["name"]
+            return "no-pod-found"
+        except Exception as exc:
+            return f"lookup-failed:{exc.__class__.__name__}"
+
+    def list_namespace_pods():
+        try:
+            with k8s_request(f"/api/v1/namespaces/{NAMESPACE}/pods") as resp:
+                data = json.loads(resp.read())
+            pods = []
+            for item in data.get("items", []):
+                labels = item.get("metadata", {}).get("labels", {})
+                statuses = item.get("status", {}).get("containerStatuses", [{}])
+                ready = bool(statuses) and all(s.get("ready") for s in statuses)
+                pods.append({
+                    "role": labels.get("app", "?"),
+                    "pod_name": item["metadata"]["name"],
+                    "phase": item.get("status", {}).get("phase", "Unknown"),
+                    "ready": ready,
+                })
+            pods.sort(key=lambda p: p["role"])
+            return pods
+        except Exception as exc:
+            return [{"role": "?", "pod_name": f"lookup-failed:{exc.__class__.__name__}", "phase": "Unknown", "ready": False}]
+
+    class Handler(BaseHTTPRequestHandler):
+        def _cors(self):
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+        def do_OPTIONS(self):
+            self.send_response(204)
+            self._cors()
+            self.end_headers()
+
+        def _json(self, payload):
+            body = json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self._cors()
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            # No-cost identity lookups (never call the gateway, so these never
+            # touch a rate-limit budget): the dashboard uses these at load
+            # time to show real pod names before any request is sent.
+            parsed = urllib.parse.urlsplit(self.path)
+            if parsed.path == "/whoami":
+                self._json({"app_pod": POD_NAME, "app_id": APP_ID, "tier": TIER, "pod_ip": POD_IP})
+                return
+            if parsed.path == "/gateway-pod":
+                gw = urllib.parse.parse_qs(parsed.query).get("gw", ["a"])[0]
+                self._json({"gateway": gw, "gateway_pod": resolve_gateway_pod_name(f"gateway-{gw}")})
+                return
+            if parsed.path == "/cluster-pods":
+                # Live "kubectl get pods -n trl-demo" equivalent, so the
+                # dashboard can show the whole real deployment topology (not
+                # just the one pod each card already links to) -- the
+                # single strongest "this isn't a mock" signal available,
+                # since it's the entire namespace's actual live state.
+                self._json({"namespace": NAMESPACE, "pods": list_namespace_pods()})
+                return
+            if parsed.path == "/gw-logs":
+                gw = urllib.parse.parse_qs(parsed.query).get("gw", ["a"])[0]
+                self._stream_gateway_logs(gw)
+                return
+            self.send_response(404)
+            self._cors()
+            self.end_headers()
+
+        def _sse_send(self, data):
+            for line in data.splitlines() or [""]:
+                self.wfile.write(f"data: {line}\n".encode())
+            self.wfile.write(b"\n")
+            self.wfile.flush()
+
+        def _stream_gateway_logs(self, gw):
+            # Streams the *real* stdout of the gateway-<gw> pod -- the exact
+            # same data `kubectl logs -f` reads -- via the Kubernetes API's
+            # pods/log subresource (?follow=true), as Server-Sent Events.
+            # ANSI color codes are stripped for plain display; nothing else
+            # about the log content is altered or synthesized.
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self._cors()
+            self.end_headers()
+            pod = resolve_gateway_pod_name(f"gateway-{gw}")
+            if pod.startswith("lookup-failed") or pod == "no-pod-found":
+                self._sse_send(f"[dashboard] could not resolve gateway-{gw} pod: {pod}")
+                return
+            self._sse_send(f"[dashboard] streaming real stdout from pod {pod} (kubectl logs -f equivalent)")
+            try:
+                # tailLines=0: no historical backlog. The gateway pod may have
+                # been running (and logging requests from earlier app-pod
+                # generations with now-recycled IPs) long before this browser
+                # session's ipToApp map was built, so replaying old lines
+                # would show unresolvable stale IPs instead of app names.
+                # Starting empty and filling live as "Run scenario" executes
+                # is both correct and a clearer signal that this is real.
+                with k8s_request(
+                    f"/api/v1/namespaces/{NAMESPACE}/pods/{pod}/log"
+                    f"?follow=true&tailLines=0&timestamps=false",
+                    timeout=None,
+                ) as resp:
+                    for raw_line in resp:
+                        line = ANSI_RE.sub("", raw_line.decode(errors="replace")).rstrip("\n")
+                        if line:
+                            self._sse_send(line)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except Exception as exc:
+                try:
+                    self._sse_send(f"[dashboard] log stream ended: {exc.__class__.__name__}")
+                except Exception:
+                    pass
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                req_body = json.loads(raw or b"{}")
+            except Exception:
+                req_body = {}
+            gw = req_body.get("gateway", "a")
+            gw_host = f"gateway-{gw}"
+
+            gw_req = urllib.request.Request(
+                f"http://{gw_host}:8080/v1/chat/completions",
+                data=json.dumps(
+                    {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]}
+                ).encode(),
+                headers={
+                    "Content-Type": "application/json",
+                    "x-tier": TIER,
+                    "x-app-id": APP_ID,
+                },
+                method="POST",
+            )
+            t0 = time.monotonic()
+            try:
+                with urllib.request.urlopen(gw_req, timeout=5) as resp:
+                    status = resp.status
+                    resp_headers = {k.lower(): v for k, v in resp.getheaders()}
+                    resp_body = resp.read()
+            except urllib.error.HTTPError as e:
+                status = e.code
+                resp_headers = {k.lower(): v for k, v in e.headers.items()}
+                resp_body = e.read()
+            except urllib.error.URLError as e:
+                status = 503
+                resp_headers = {}
+                resp_body = json.dumps({"error": f"gateway unreachable: {e.reason}"}).encode()
+            latency_ms = (time.monotonic() - t0) * 1000
+
+            try:
+                backend_body = json.loads(resp_body) if resp_body else None
+            except Exception:
+                backend_body = None
+
+            out = {
+                "app_pod": POD_NAME,
+                "app_id": APP_ID,
+                "tier": TIER,
+                "gateway": gw,
+                "gateway_pod": resolve_gateway_pod_name(gw_host),
+                "status": status,
+                "latency_ms": round(latency_ms, 1),
+                "rate_limit": {
+                    "limit_tokens": resp_headers.get("x-ratelimit-limit-tokens"),
+                    "remaining_tokens": resp_headers.get("x-ratelimit-remaining-tokens"),
+                    "retry_after": resp_headers.get("retry-after"),
+                    "reset_tokens": resp_headers.get("x-ratelimit-reset-tokens"),
+                },
+                "backend_body": backend_body,
+                "request_id": str(uuid.uuid4()),
+            }
+            self._json(out)
+
+        def log_message(self, *_args):
+            pass
+
+    # Threading server: a long-lived /gw-logs SSE stream must not block
+    # concurrent /send requests from the same pod.
+    ThreadingHTTPServer(("0.0.0.0", 4000), Handler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-a
+  namespace: trl-demo
+  labels: { app: app-a }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: app-a }
+  template:
+    metadata:
+      labels: { app: app-a }
+    spec:
+      serviceAccountName: trl-demo-app
+      containers:
+        - name: app
+          image: docker.io/library/python:3.13-alpine
+          command: ["python3", "/srv/app.py"]
+          env:
+            - name: APP_ID
+              value: "app-a"
+            - name: TIER
+              value: "gold"
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - name: POD_IP
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+          volumeMounts:
+            - name: script
+              mountPath: /srv
+          ports:
+            - containerPort: 4000
+      volumes:
+        - name: script
+          configMap: { name: app-script }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-a
+  namespace: trl-demo
+spec:
+  selector: { app: app-a }
+  ports:
+    - port: 4000
+      targetPort: 4000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-b
+  namespace: trl-demo
+  labels: { app: app-b }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: app-b }
+  template:
+    metadata:
+      labels: { app: app-b }
+    spec:
+      serviceAccountName: trl-demo-app
+      containers:
+        - name: app
+          image: docker.io/library/python:3.13-alpine
+          command: ["python3", "/srv/app.py"]
+          env:
+            - name: APP_ID
+              value: "app-b"
+            - name: TIER
+              value: "silver"
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - name: POD_IP
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+          volumeMounts:
+            - name: script
+              mountPath: /srv
+          ports:
+            - containerPort: 4000
+      volumes:
+        - name: script
+          configMap: { name: app-script }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-b
+  namespace: trl-demo
+spec:
+  selector: { app: app-b }
+  ports:
+    - port: 4000
+      targetPort: 4000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-c
+  namespace: trl-demo
+  labels: { app: app-c }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: app-c }
+  template:
+    metadata:
+      labels: { app: app-c }
+    spec:
+      serviceAccountName: trl-demo-app
+      containers:
+        - name: app
+          image: docker.io/library/python:3.13-alpine
+          command: ["python3", "/srv/app.py"]
+          env:
+            - name: APP_ID
+              value: "app-c"
+            - name: TIER
+              value: "gold"
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - name: POD_IP
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+          volumeMounts:
+            - name: script
+              mountPath: /srv
+          ports:
+            - containerPort: 4000
+      volumes:
+        - name: script
+          configMap: { name: app-script }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-c
+  namespace: trl-demo
+spec:
+  selector: { app: app-c }
+  ports:
+    - port: 4000
+      targetPort: 4000
