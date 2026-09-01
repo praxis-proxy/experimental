@@ -3,31 +3,26 @@
 <head>
 <meta charset="utf-8" />
 <title>Per-app token budgets — proof agenda</title>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Red+Hat+Display:wght@500;700;900&family=Red+Hat+Text:wght@400;500;700&family=Red+Hat+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <style>
   /*
-   * Red Hat brand palette + type, per redhat.com/en/about/brand/standards
-   * (color: #ee0000 "Red Hat red"/red-50 core palette; typography: Red Hat
-   * Display for headlines, Red Hat Text for body, Red Hat Mono for code).
-   * This deck is themed light to match Red Hat's own presentation template
-   * (white background, red-50 accents, dark gray-95 headings) rather than
-   * this repo's earlier ad hoc dark palette.
+   * A generic, non-branded palette and system font stack (no external font
+   * loads), matching dashboard/index.html's own unbranded skin. Kept light
+   * rather than the dashboard's dark theme since a light card-based layout
+   * reads better for a title/architecture/preview deck spliced ahead of it.
    */
   :root {
-    --rh-red-50: #ee0000; --rh-red-40: #f56e6e; --rh-red-10: #fce3e3;
-    --rh-white: #ffffff; --rh-gray-10: #f2f2f2; --rh-gray-20: #e0e0e0;
-    --rh-gray-30: #c7c7c7; --rh-gray-50: #707070; --rh-gray-60: #4d4d4d;
-    --rh-gray-95: #151515;
-    --rh-success-50: #63993d; --rh-danger-orange-50: #f0561d;
-    --rh-teal-50: #37a3a3; --rh-orange-40: #f5921b; --rh-purple-40: #876fd4;
+    --accent-50: #2b6cb0; --accent-40: #63b3ed; --accent-10: #ebf8ff;
+    --white: #ffffff; --gray-10: #f2f2f2; --gray-20: #e0e0e0;
+    --gray-30: #c7c7c7; --gray-50: #707070; --gray-60: #4d4d4d;
+    --gray-95: #151515;
+    --success-50: #63993d; --danger-orange-50: #f0561d;
+    --teal-50: #37a3a3; --orange-40: #f5921b; --purple-40: #876fd4;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0; width: 1920px; height: 1080px;
-    background: var(--rh-white); color: var(--rh-gray-95);
-    font: 28px 'Red Hat Text', system-ui, sans-serif; padding: 100px; box-sizing: border-box;
+    background: var(--white); color: var(--gray-95);
+    font: 28px system-ui, -apple-system, sans-serif; padding: 100px; box-sizing: border-box;
     position: relative; overflow: hidden;
   }
   /* Deliberately an instant cut, not a cross-fade: these three sections have
@@ -37,69 +32,69 @@
      read as flicker in the assembled video, not a smooth dissolve. */
   section { position: absolute; inset: 0; padding: 100px; opacity: 0; visibility: hidden; }
   section.active { opacity: 1; visibility: visible; }
-  .eyebrow { letter-spacing: 3px; font-size: 20px; font-weight: 700; color: var(--rh-red-50); margin-bottom: 14px; font-family: 'Red Hat Text', sans-serif; }
+  .eyebrow { letter-spacing: 3px; font-size: 20px; font-weight: 700; color: var(--accent-50); margin-bottom: 14px; font-family: system-ui, sans-serif; }
   h1 {
-    font-family: 'Red Hat Display', sans-serif; font-size: 54px; font-weight: 900;
-    color: var(--rh-gray-95); margin: 0 0 20px; line-height: 1.15;
-    padding-bottom: 22px; border-bottom: 3px solid var(--rh-red-50);
+    font-family: system-ui, sans-serif; font-size: 54px; font-weight: 900;
+    color: var(--gray-95); margin: 0 0 20px; line-height: 1.15;
+    padding-bottom: 22px; border-bottom: 3px solid var(--accent-50);
     display: inline-block;
   }
-  .lede { color: var(--rh-gray-60); font-size: 28px; margin: 26px 0 50px; max-width: 1500px; }
+  .lede { color: var(--gray-60); font-size: 28px; margin: 26px 0 50px; max-width: 1500px; }
 
   /* Section 1: title + cards */
   .cards { display: flex; gap: 24px; margin-top: 40px; }
   .card {
-    flex: 1; border-top: 4px solid var(--rh-red-50); border-radius: 4px;
-    background: var(--rh-white); border-left: 1px solid var(--rh-gray-20);
-    border-right: 1px solid var(--rh-gray-20); border-bottom: 1px solid var(--rh-gray-20);
+    flex: 1; border-top: 4px solid var(--accent-50); border-radius: 4px;
+    background: var(--white); border-left: 1px solid var(--gray-20);
+    border-right: 1px solid var(--gray-20); border-bottom: 1px solid var(--gray-20);
     padding: 28px 26px; box-shadow: 0 2px 6px rgba(21,21,21,0.08);
   }
-  .card h3 { margin: 0 0 12px; font-size: 24px; font-family: 'Red Hat Display', sans-serif; font-weight: 700; color: var(--rh-red-50); }
-  .card p { margin: 0; color: var(--rh-gray-60); font-size: 20px; line-height: 1.5; }
+  .card h3 { margin: 0 0 12px; font-size: 24px; font-family: system-ui, sans-serif; font-weight: 700; color: var(--accent-50); }
+  .card p { margin: 0; color: var(--gray-60); font-size: 20px; line-height: 1.5; }
 
   /* Section 2: architecture */
   .flow { display: flex; gap: 20px; align-items: center; margin: 40px 0 50px; }
   .node {
-    border: 2px solid var(--rh-gray-30); border-radius: 8px; padding: 24px;
-    background: var(--rh-white); text-align: center; flex: 1; font-size: 22px; font-weight: 700;
-    font-family: 'Red Hat Display', sans-serif; color: var(--rh-gray-95);
+    border: 2px solid var(--gray-30); border-radius: 8px; padding: 24px;
+    background: var(--white); text-align: center; flex: 1; font-size: 22px; font-weight: 700;
+    font-family: system-ui, sans-serif; color: var(--gray-95);
   }
-  .node small { display: block; color: var(--rh-gray-50); font-size: 16px; font-weight: 400; margin-top: 6px; font-family: 'Red Hat Text', sans-serif; }
-  .node.ledger { border-color: var(--rh-red-50); border-width: 3px; color: var(--rh-red-50); }
-  .arrow { font-size: 34px; color: var(--rh-gray-30); }
+  .node small { display: block; color: var(--gray-50); font-size: 16px; font-weight: 400; margin-top: 6px; font-family: system-ui, sans-serif; }
+  .node.ledger { border-color: var(--accent-50); border-width: 3px; color: var(--accent-50); }
+  .arrow { font-size: 34px; color: var(--gray-30); }
   .cols { display: flex; gap: 24px; }
-  .col { flex: 1; background: var(--rh-gray-10); border-radius: 8px; padding: 24px 28px; }
-  .col h4 { margin: 0 0 12px; font-size: 20px; color: var(--rh-red-50); font-family: 'Red Hat Display', sans-serif; font-weight: 700; }
-  .col ul { margin: 0; padding-left: 22px; font-size: 19px; line-height: 1.7; color: var(--rh-gray-60); }
+  .col { flex: 1; background: var(--gray-10); border-radius: 8px; padding: 24px 28px; }
+  .col h4 { margin: 0 0 12px; font-size: 20px; color: var(--accent-50); font-family: system-ui, sans-serif; font-weight: 700; }
+  .col ul { margin: 0; padding-left: 22px; font-size: 19px; line-height: 1.7; color: var(--gray-60); }
 
   /* Section 3: animated topology preview */
   .topo { position: relative; width: 100%; height: 620px; margin-top: 30px; }
   .box {
-    position: absolute; border: 2px solid var(--rh-gray-30); border-radius: 8px; background: var(--rh-white);
+    position: absolute; border: 2px solid var(--gray-30); border-radius: 8px; background: var(--white);
     padding: 16px 20px; font-size: 19px; font-weight: 700; text-align: center; width: 220px;
-    font-family: 'Red Hat Display', sans-serif; color: var(--rh-gray-95);
+    font-family: system-ui, sans-serif; color: var(--gray-95);
     box-shadow: 0 2px 6px rgba(21,21,21,0.08);
   }
-  .box small { display: block; color: var(--rh-gray-50); font-size: 13px; font-weight: 400; margin-top: 4px; font-family: 'Red Hat Text', sans-serif; }
-  .box.app { border-color: var(--rh-purple-40); }
-  .box.gw { border-color: var(--rh-teal-50); }
-  .box.valkey { border-color: var(--rh-red-50); border-width: 3px; width: 240px; color: var(--rh-red-50); }
-  .box.backend { border-color: var(--rh-orange-40); }
+  .box small { display: block; color: var(--gray-50); font-size: 13px; font-weight: 400; margin-top: 4px; font-family: system-ui, sans-serif; }
+  .box.app { border-color: var(--purple-40); }
+  .box.gw { border-color: var(--teal-50); }
+  .box.valkey { border-color: var(--accent-50); border-width: 3px; width: 240px; color: var(--accent-50); }
+  .box.backend { border-color: var(--orange-40); }
   .dot {
     position: absolute; width: 22px; height: 22px; border-radius: 50%;
-    background: var(--rh-red-50); box-shadow: 0 0 16px 4px rgba(238,0,0,0.45);
+    background: var(--accent-50); box-shadow: 0 0 16px 4px rgba(43,108,176,0.45);
     transition: left 0.9s ease, top 0.9s ease, background 0.3s ease, box-shadow 0.3s ease, opacity 0.3s ease;
     opacity: 0;
   }
-  .dot.admit { background: var(--rh-success-50); box-shadow: 0 0 16px 4px rgba(99,153,61,0.45); }
-  .dot.deny { background: var(--rh-danger-orange-50); box-shadow: 0 0 16px 4px rgba(240,86,29,0.45); }
+  .dot.admit { background: var(--success-50); box-shadow: 0 0 16px 4px rgba(99,153,61,0.45); }
+  .dot.deny { background: var(--danger-orange-50); box-shadow: 0 0 16px 4px rgba(240,86,29,0.45); }
   .caption {
     position: absolute; left: 0; right: 0; bottom: 0; text-align: center;
-    font-size: 26px; font-weight: 700; min-height: 40px; font-family: 'Red Hat Display', sans-serif;
-    color: var(--rh-gray-95);
+    font-size: 26px; font-weight: 700; min-height: 40px; font-family: system-ui, sans-serif;
+    color: var(--gray-95);
   }
-  .caption.admit { color: var(--rh-success-50); }
-  .caption.deny { color: var(--rh-danger-orange-50); }
+  .caption.admit { color: var(--success-50); }
+  .caption.deny { color: var(--danger-orange-50); }
 </style>
 </head>
 <body>

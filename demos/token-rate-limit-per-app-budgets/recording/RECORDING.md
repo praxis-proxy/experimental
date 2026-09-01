@@ -14,6 +14,11 @@ an `x-tier` header, per ai#789/praxis#551.
 **Watch:** `output/k8s-real-pods-token-rate-limit.mp4` (1920x1080, h264/aac,
 ~143s)
 
+`slides/proof-agenda.html`'s palette/fonts were restyled to a generic,
+non-branded look after this video was recorded, so the shipped clip's intro
+still shows the earlier Red Hat-styled cards -- flagged here pending a
+re-record.
+
 An earlier, single-algorithm (`sliding_window`-only) recording of this same
 demo existed before the mixed-algorithm scenario landed; it has been
 superseded and removed since it no longer matches the current
