@@ -1,0 +1,126 @@
+# Praxis in front of a local Ollama, enforcing per-tier token budgets.
+#
+# Two rules, evaluated in order -- the first whose `match` is satisfied wins,
+# and a rule with no `match` is the catch-all:
+#
+#   premium  (X-Tier: premium)  20,000 tokens/min  ~290 requests/min
+#   free     (everything else)   5,000 tokens/min    ~70 requests/min
+#
+# reserved_tokens is 200, a realistic per-request estimate for a short chat
+# completion, rather than a number tuned to trip quickly. The requests/min
+# figures are measured: reservations reconcile against what the model actually
+# returned (~68 tokens here), so `capacity / reserved_tokens` (~25 on free)
+# understates the sustained limit. See the callout in README.md step 8.
+#
+# See basic.yaml for the Ollama/host-networking notes.
+
+# allow_private_endpoints: `host.docker.internal` resolves to a private
+#   address, which praxis rejects by default as SSRF / DNS-rebinding
+#   hardening. The upstream here is a model server on this same machine,
+#   deliberately, so the guard is turned off.
+# allow_public_admin: the admin listener carries /metrics, which Prometheus
+#   scrapes from another pod, so it must bind the pod IP, not loopback.
+#   DEMO ONLY. The same listener also serves /api/log-level (PUT/DELETE) and
+#   /api/kv, so this makes them reachable from every pod in the cluster. A
+#   real deployment needs a NetworkPolicy restricting :9901 to the scraper,
+#   or metrics split onto their own port -- praxis does not offer the latter
+#   today.
+insecure_options:
+  allow_private_endpoints: true
+  allow_public_admin: true
+
+admin:
+  address: "0.0.0.0:9901"
+
+# Spans go to the collector, which forwards to Tempo. Tempo's
+# metrics-generator then derives traces_spanmetrics_* from them, which is what
+# the per-filter latency dashboard queries.
+telemetry:
+  otlp_endpoint: "http://otel-collector.otel.svc:4317"
+  # Keep every trace. This demo runs a handful of requests per minute through a
+  # local model, and the span-derived dashboards need every one of them to say
+  # anything; at 0.1 they would be built from six traces. The otel-benchmark
+  # demo drives ~500 RPS and runs at 0.1 -- that is where the "sampled plane vs
+  # Prometheus plane" divergence shows. Here the Sampling Ratio Cross-Check
+  # panel should read ~1.0; below that, spans are being lost, not sampled.
+  sampling_rate: 1.0
+
+listeners:
+  - name: gateway
+    address: "0.0.0.0:8080"
+    filter_chains: [main]
+
+filter_chains:
+  - name: main
+    filters:
+      - filter: request_id
+      - filter: access_log
+
+      # Promotes the JSON body's `model` field onto a header, so routing filters
+      # can key on it without re-parsing the body.
+      - filter: model_to_header
+
+      # NOTE ON ORDER: token_usage_headers is declared BEFORE token_count
+      # because response hooks run in reverse declared order -- token_count's
+      # response-body phase must populate `token.*` metadata before
+      # token_usage_headers reads it.
+      # Reservation-based token budget admission (experimental: requires the
+      # `token-rate-limit-filter` cargo feature, on in this image).
+      #
+      # Reserves `reserved_tokens` before forwarding, then reconciles against
+      # the provider's reported usage once the response completes -- refunding
+      # an over-estimate or recording an overage.
+      #
+      # NOTE ON ORDER: like token_usage_headers, this must be declared BEFORE
+      # token_count. It reconciles against the `token.total` metadata that
+      # token_count writes in its response-body phase, and response hooks run
+      # in reverse declared order. Declared after token_count it would run
+      # first, find no metadata, and silently charge every request at its
+      # flat estimate -- the metrics would look plausible and be wrong.
+      #
+      # Spelled out although `memory` is already the default: this is the
+      # knob to change for a multi-replica deployment, where `valkey` shares
+      # one budget across every replica instead of one budget per process.
+      - filter: token_rate_limit
+        backend:
+          kind: memory
+        rules:
+          # Paying tier: matched on a header the gateway trusts because an
+          # auth filter upstream is expected to set it. token_rate_limit does
+          # NOT authenticate -- see grid#101.
+          - name: premium
+            match:
+              headers:
+                X-Tier: premium
+            algorithm: sliding_window
+            window: "1m"
+            capacity: 20000
+            reserved_tokens: 200
+
+          # Catch-all. Without a trailing match-less rule, unmatched requests
+          # are not rate limited at all.
+          - name: free
+            algorithm: sliding_window
+            window: "1m"
+            capacity: 5000
+            reserved_tokens: 200
+
+      - filter: token_usage_headers
+
+      # Ollama's /v1 surface is OpenAI-shaped, so the openai provider parser
+      # applies. Verified: Ollama reports `usage` in non-streaming responses,
+      # and in streaming responses when the request sets
+      # `stream_options: {"include_usage": true}`.
+      - filter: token_count
+        provider: openai
+
+      - filter: router
+        routes:
+          - path_prefix: "/"
+            cluster: ollama
+
+      # No `tls:` block means plaintext HTTP, which is what Ollama serves.
+      - filter: load_balancer
+        clusters:
+          - name: ollama
+            endpoints: ["host.docker.internal:11434"]

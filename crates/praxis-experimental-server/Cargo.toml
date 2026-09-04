@@ -55,6 +55,7 @@ praxis-protocol = { version = "0.5.4", package = "praxis-proxy-protocol", featur
 # still moving. This image exists to expose experimental work, so it is on here
 # — it is what backs the Lakera Guard example config.
 praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", tag = "v0.3.0", features = [
+  "token-rate-limit-filter",
   "http-callout-filter",
   "praxis-main",
 ] }

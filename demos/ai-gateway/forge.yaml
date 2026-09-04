@@ -1,0 +1,186 @@
+apiVersion: forge.praxis.dev/v1alpha1
+kind: Environment
+metadata:
+  name: ai-gateway
+spec:
+  runtime:
+    provider: docker
+    clusterPrefix: ai-gw
+  network:
+    crossCluster: false
+
+  clusters:
+    - name: local
+      # Deliberately offset from the otel-benchmark demo's ports so both
+      # clusters can run side by side on one machine.
+      ports:
+        - host: 38080
+          container: 30080    # Praxis proxy
+        - host: 38901
+          container: 30901    # Praxis admin/metrics
+        - host: 33000
+          container: 30300    # Grafana
+        - host: 39090
+          container: 30909    # Prometheus
+      stacks:
+        - prometheus
+        - tempo
+        - otel-collector
+        - praxis-deploy
+        - dashboards
+      properties:
+        # Pin chart versions for reproducibility
+        kubePrometheusVersion: "72.6.3"
+        tempoVersion: "1.24.4"
+
+  stacks:
+    prometheus:
+      description: kube-prometheus-stack (Prometheus + Grafana)
+      steps:
+        - type: helm
+          release: monitoring
+          chart: prometheus-community/kube-prometheus-stack
+          version: "{{ cluster.properties.kubePrometheusVersion }}"
+          namespace: monitoring
+          values:
+            prometheus:
+              prometheusSpec:
+                serviceMonitorSelectorNilUsesHelmValues: false
+                # Tempo's metrics-generator derives span metrics from traces
+                # and remote-writes them here. Without this the receiver
+                # endpoint 404s and the generator drops everything silently.
+                enableRemoteWriteReceiver: true
+                # praxis-proxy is scraped by the ServiceMonitor in
+                # manifests/servicemonitor.yaml. Do NOT also add a static
+                # scrape config for it: two scrapers on one pod produce two
+                # series per counter, and every sum(rate(...)) panel then
+                # reports exactly double the true rate.
+                additionalScrapeConfigs:
+                  # The collector's own telemetry. Without this,
+                  # otelcol_exporter_send_failed_spans is invisible and span
+                  # loss between the collector and Tempo is silent.
+                  - job_name: otel-collector
+                    metrics_path: /metrics
+                    scrape_interval: 15s
+                    static_configs:
+                      - targets: ["otel-collector.otel.svc:8888"]
+              service:
+                type: NodePort
+                nodePort: 30909
+            grafana:
+              adminPassword: admin
+              sidecar:
+                datasources:
+                  # This chart provisions its own Prometheus datasource, marked
+                  # default with a generated uid. Grafana refuses to start if
+                  # two datasources claim default, and the dashboards need the
+                  # stable uids below, so the chart's copy is turned off.
+                  defaultDatasourceEnabled: false
+              # Declared here rather than POSTed to Grafana's API afterwards:
+              # API-created datasources live in Grafana's SQLite and vanish on
+              # a pod restart, taking every panel with them.
+              additionalDataSources:
+                - name: Prometheus
+                  type: prometheus
+                  uid: prometheus
+                  access: proxy
+                  isDefault: true
+                  url: http://monitoring-kube-prometheus-prometheus.monitoring.svc:9090
+                - name: Tempo
+                  type: tempo
+                  uid: tempo
+                  access: proxy
+                  url: http://tempo.monitoring.svc:3200
+              image:
+                tag: 11.6.0
+              service:
+                type: NodePort
+                nodePort: 30300
+        - type: wait
+          resource: deployment/monitoring-grafana
+          namespace: monitoring
+          condition: available
+          timeout: "300s"
+
+    tempo:
+      description: Tempo trace storage + span metrics generator
+      steps:
+        - type: helm
+          release: tempo
+          chart: grafana/tempo
+          version: "{{ cluster.properties.tempoVersion }}"
+          namespace: monitoring
+          values:
+            tempo:
+              # The metrics-generator turns spans into RED metrics
+              # (traces_spanmetrics_*). Praxis emits one span per filter, so
+              # span_name becomes the breakdown key -- this is what makes
+              # per-filter latency queryable in Grafana.
+              #
+              # Every key here is nested under `tempo:`. The chart has no
+              # top-level metricsGenerator/overrides, and values placed there
+              # are silently ignored, leaving the generator writing to the
+              # chart's default (wrong) Prometheus address.
+              metricsGenerator:
+                enabled: true
+                remoteWriteUrl: http://monitoring-kube-prometheus-prometheus.monitoring.svc:9090/api/v1/write
+              # Generators only run for tenants that enable them; without this
+              # the generator starts but processes nothing.
+              overrides:
+                defaults:
+                  metrics_generator:
+                    processors:
+                      - service-graphs
+                      - span-metrics
+              # Tempo's OTLP receiver inherits grpc-go's 4 MiB default. A batch
+              # over that is rejected as ResourceExhausted, which the collector
+              # treats as permanent and drops WHOLE -- silently, while every
+              # request still returns 200. Raising the receiver limit is the
+              # root-cause fix; the collector's batch caps are defence in depth.
+              receivers:
+                otlp:
+                  protocols:
+                    grpc:
+                      endpoint: "0.0.0.0:4317"
+                      max_recv_msg_size_mib: 32
+                    http:
+                      endpoint: "0.0.0.0:4318"
+
+    otel-collector:
+      description: OpenTelemetry Collector (OTLP -> Tempo)
+      steps:
+        # exec steps run with the ambient kubectl context (forge scopes only
+        # manifest/helm/wait steps to the cluster), so name it explicitly: with two
+        # KIND clusters up, the current context is whichever was created last.
+        - type: exec
+          command: [bash, -c, "kubectl --context kind-ai-gw-local create namespace otel --dry-run=client -o yaml | kubectl --context kind-ai-gw-local apply -f -"]
+        - type: manifest
+          path: stacks/observability/manifests/otel-collector.yaml
+        - type: wait
+          resource: deployment/otel-collector
+          namespace: otel
+          condition: available
+          timeout: "60s"
+
+    praxis-deploy:
+      description: Deploy Praxis pointed at the host's Ollama
+      steps:
+        - type: exec
+          command: [bash, -c, "kubectl --context kind-ai-gw-local create configmap praxis-config --from-file=praxis.yaml=configs/token-budget.yaml -n default --dry-run=client -o yaml | kubectl --context kind-ai-gw-local apply -f -"]
+        - type: manifest
+          path: manifests/praxis.yaml
+        - type: manifest
+          path: manifests/servicemonitor.yaml
+        - type: wait
+          resource: deployment/praxis-proxy
+          namespace: default
+          condition: available
+          timeout: "120s"
+
+    dashboards:
+      description: Load Grafana dashboards via ConfigMap
+      steps:
+        - type: exec
+          command: [bash, -c, "kubectl --context kind-ai-gw-local -n monitoring create configmap praxis-dashboards --from-file=stacks/observability/dashboards/ --dry-run=client -o yaml | kubectl --context kind-ai-gw-local apply -f -"]
+        - type: exec
+          command: [kubectl, --context, kind-ai-gw-local, -n, monitoring, label, configmap, praxis-dashboards, grafana_dashboard=1, --overwrite]

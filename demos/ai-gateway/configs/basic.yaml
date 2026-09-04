@@ -1,0 +1,77 @@
+# Praxis in front of a local Ollama, with token accounting.
+#
+# Ollama runs on the HOST (Metal GPU is not reachable from Linux containers on
+# macOS), praxis runs in a container and reaches it over the container runtime's
+# host gateway. Leave Ollama on its default 127.0.0.1 binding -- Docker Desktop
+# and Rancher Desktop proxy `host.docker.internal` from the host side, so
+# loopback is reachable and there is no reason to expose Ollama to the network.
+
+# allow_private_endpoints: `host.docker.internal` resolves to a private
+#   address, which praxis rejects by default as SSRF / DNS-rebinding
+#   hardening. The upstream here is a model server on this same machine,
+#   deliberately, so the guard is turned off.
+# allow_public_admin: the admin listener carries /metrics, which Prometheus
+#   scrapes from another pod, so it must bind the pod IP, not loopback.
+#   DEMO ONLY. The same listener also serves /api/log-level (PUT/DELETE) and
+#   /api/kv, so this makes them reachable from every pod in the cluster. A
+#   real deployment needs a NetworkPolicy restricting :9901 to the scraper,
+#   or metrics split onto their own port -- praxis does not offer the latter
+#   today.
+insecure_options:
+  allow_private_endpoints: true
+  allow_public_admin: true
+
+admin:
+  address: "0.0.0.0:9901"
+
+# Spans go to the collector, which forwards to Tempo. Tempo's
+# metrics-generator then derives traces_spanmetrics_* from them, which is what
+# the per-filter latency dashboard queries.
+telemetry:
+  otlp_endpoint: "http://otel-collector.otel.svc:4317"
+  # Keep every trace. This demo runs a handful of requests per minute through a
+  # local model, and the span-derived dashboards need every one of them to say
+  # anything; at 0.1 they would be built from six traces. The otel-benchmark
+  # demo drives ~500 RPS and runs at 0.1 -- that is where the "sampled plane vs
+  # Prometheus plane" divergence shows. Here the Sampling Ratio Cross-Check
+  # panel should read ~1.0; below that, spans are being lost, not sampled.
+  sampling_rate: 1.0
+
+listeners:
+  - name: gateway
+    address: "0.0.0.0:8080"
+    filter_chains: [main]
+
+filter_chains:
+  - name: main
+    filters:
+      - filter: request_id
+      - filter: access_log
+
+      # Promotes the JSON body's `model` field onto a header, so routing filters
+      # can key on it without re-parsing the body.
+      - filter: model_to_header
+
+      # NOTE ON ORDER: token_usage_headers is declared BEFORE token_count
+      # because response hooks run in reverse declared order -- token_count's
+      # response-body phase must populate `token.*` metadata before
+      # token_usage_headers reads it.
+      - filter: token_usage_headers
+
+      # Ollama's /v1 surface is OpenAI-shaped, so the openai provider parser
+      # applies. Verified: Ollama reports `usage` in non-streaming responses,
+      # and in streaming responses when the request sets
+      # `stream_options: {"include_usage": true}`.
+      - filter: token_count
+        provider: openai
+
+      - filter: router
+        routes:
+          - path_prefix: "/"
+            cluster: ollama
+
+      # No `tls:` block means plaintext HTTP, which is what Ollama serves.
+      - filter: load_balancer
+        clusters:
+          - name: ollama
+            endpoints: ["host.docker.internal:11434"]

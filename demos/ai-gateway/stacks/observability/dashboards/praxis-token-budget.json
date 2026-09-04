@@ -1,0 +1,318 @@
+{
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No traffic yet"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(praxis_ai_token_rate_limit_tokens_total{kind=\"actual\"})",
+          "legendFormat": "Tokens"
+        }
+      ],
+      "title": "Tokens Consumed (total)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "max": 1,
+          "min": 0,
+          "noValue": "No traffic yet",
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.05
+              },
+              {
+                "color": "red",
+                "value": 0.25
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(praxis_ai_token_rate_limit_requests_total{decision=\"denied\"}) / clamp_min(sum(praxis_ai_token_rate_limit_requests_total), 1)",
+          "legendFormat": "Denied share"
+        }
+      ],
+      "title": "Budget Denial Rate",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(praxis_ai_token_rate_limit_active_reservations)",
+          "legendFormat": "In flight"
+        }
+      ],
+      "title": "Active Reservations",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "id": 4,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(praxis_ai_token_rate_limit_active_keys)",
+          "legendFormat": "Budget keys"
+        }
+      ],
+      "title": "Active Budget Keys",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No traffic yet"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "id": 5,
+      "targets": [
+        {
+          "expr": "sum by (rule) (rate(praxis_ai_token_rate_limit_tokens_total{kind=\"actual\"}[1m]))",
+          "legendFormat": "{{rule}} actual"
+        }
+      ],
+      "title": "Token Consumption Rate (tokens/sec)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "noValue": "No traffic yet"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "id": 6,
+      "targets": [
+        {
+          "expr": "sum by (decision) (rate(praxis_ai_token_rate_limit_requests_total[5m]))",
+          "legendFormat": "{{decision}}"
+        }
+      ],
+      "title": "Admitted vs Denied",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Reservation-based admission reserves an estimate before forwarding, then reconciles against actual usage. Overage means the estimate was too low; refunded means it was too high.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No traffic yet"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "id": 7,
+      "targets": [
+        {
+          "expr": "sum by (kind) (rate(praxis_ai_token_rate_limit_tokens_total[1m]))",
+          "legendFormat": "{{kind}}"
+        }
+      ],
+      "title": "Estimation Accuracy: estimated vs actual vs refunded vs overage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No traffic yet"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "id": 8,
+      "targets": [
+        {
+          "expr": "sum by (result) (rate(praxis_ai_token_rate_limit_reservations_total[1m]))",
+          "legendFormat": "{{result}}"
+        }
+      ],
+      "title": "Reservation Outcomes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "429s returned by the gateway. token_rate_limit denials surface here as 4xx.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "noValue": "No traffic yet"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "id": 9,
+      "targets": [
+        {
+          "expr": "sum by (status_class) (rate(praxis_http_requests_total[1m]))",
+          "legendFormat": "{{status_class}}"
+        }
+      ],
+      "title": "HTTP Status Classes (429s appear as 4xx)",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": [
+    "praxis",
+    "ai",
+    "tokens"
+  ],
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "title": "Praxis Token Budget & Rate Limiting",
+  "uid": "praxis-token-budget"
+}

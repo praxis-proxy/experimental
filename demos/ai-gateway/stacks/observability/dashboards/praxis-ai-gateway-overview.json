@@ -1,0 +1,152 @@
+{
+  "editable": true,
+  "graphTooltip": 1,
+  "description": "Combines the two telemetry planes deliberately. Prometheus counters are incremented on EVERY request and are unaffected by trace sampling, so they own all counts, rates and budget state. Span metrics are derived only from sampled traces, so they own latency distributions and the per-filter breakdown -- never volume. Each panel below states which plane it reads and why.",
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "panels": [],
+      "title": "Traffic & budget — Prometheus (100% of requests, sampling-independent)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Every request, regardless of trace sampling.",
+      "fieldConfig": { "defaults": { "unit": "reqps", "noValue": "No traffic yet" }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 1 },
+      "id": 1,
+      "targets": [
+        { "expr": "sum by (status_class) (rate(praxis_http_requests_total[1m]))", "legendFormat": "{{status_class}}" }
+      ],
+      "title": "Request Rate by Status (429s show as 4xx)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Admission decisions per budget rule. `denied` is a 429 the gateway returned because the tier's token budget was exhausted.",
+      "fieldConfig": { "defaults": { "unit": "reqps", "noValue": "token_rate_limit not in the chain" }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 1 },
+      "id": 2,
+      "targets": [
+        {
+          "expr": "sum by (rule, decision) (rate(praxis_ai_token_rate_limit_requests_total[5m]))",
+          "legendFormat": "{{rule}} / {{decision}}"
+        }
+      ],
+      "title": "Admitted vs Denied, per Tier",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Share of requests rejected for budget. Sustained non-zero on the free tier is the limit working as intended; on premium it means the tier is under-provisioned.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "No decisions yet",
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.1 }, { "color": "red", "value": 0.4 }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 1 },
+      "id": 3,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "sum by (rule) (rate(praxis_ai_token_rate_limit_requests_total{decision=\"denied\"}[5m])) / clamp_min(sum by (rule) (rate(praxis_ai_token_rate_limit_requests_total[5m])), 0.0001)",
+          "legendFormat": "{{rule}}"
+        }
+      ],
+      "title": "Denial Rate per Tier",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Real token consumption, reconciled against what the model reported. This is the only source of true token counts: token_count writes to per-request filter_metadata that nothing else reads.",
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "No traffic yet" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 4,
+      "targets": [
+        { "expr": "sum by (rule) (rate(praxis_ai_token_rate_limit_tokens_total{kind=\"actual\"}[1m]))", "legendFormat": "{{rule}} actual" }
+      ],
+      "title": "Token Consumption Rate (tokens/sec)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Reservation-based admission reserves an estimate before forwarding, then reconciles against actual usage. Overage means the estimate was too low; refunded means it was too high.",
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "No traffic yet" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 5,
+      "targets": [
+        { "expr": "sum by (kind) (rate(praxis_ai_token_rate_limit_tokens_total[1m]))", "legendFormat": "{{kind}}" }
+      ],
+      "title": "Estimation Accuracy: estimated vs actual vs refunded vs overage",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 16 },
+      "id": 101,
+      "panels": [],
+      "title": "Latency — span metrics (SAMPLED subset: distributions are valid, volume is NOT)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Per-filter P99, derived from trace spans. Praxis emits one span per filter per phase, so span_name is the breakdown key. SAMPLED: random sampling is unbiased for percentiles, so these are trustworthy even at sampling_rate 0.1. Do NOT read volume off this panel.",
+      "fieldConfig": { "defaults": { "unit": "s", "noValue": "No span metrics - is Tempo's metrics-generator enabled?" }, "overrides": [] },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 17 },
+      "id": 6,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["max"] } },
+      "targets": [
+        {
+          "expr": "topk(10, histogram_quantile(0.99, sum by (span_name, le) (rate(traces_spanmetrics_latency_bucket{service=\"praxis\"}[5m]))))",
+          "legendFormat": "{{span_name}}"
+        }
+      ],
+      "title": "P99 Latency by Filter Span (sampled)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Total time attributable to each filter. The latency quantile comes from SAMPLED span metrics, but the call rate is taken from praxis_http_requests_total -- a Prometheus counter covering 100% of requests. Multiplying a sampled rate here would under-report by exactly the sampling factor.",
+      "fieldConfig": { "defaults": { "unit": "s", "noValue": "No span metrics yet" }, "overrides": [] },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 17 },
+      "id": 7,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean"] } },
+      "targets": [
+        {
+          "expr": "topk(10, histogram_quantile(0.99, sum by (span_name, le) (rate(traces_spanmetrics_latency_bucket{service=\"praxis\"}[5m]))) * scalar(sum(rate(praxis_http_requests_total[5m]))))",
+          "legendFormat": "{{span_name}}"
+        }
+      ],
+      "title": "Weighted Filter Cost — sampled P99 x TRUE request rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Cross-check between the two planes. The ratio of span-derived call rate to the true request rate should approximate the configured sampling_rate. A sudden drop means spans are being lost, not sampled -- see the Span Export Failures panel.",
+      "fieldConfig": { "defaults": { "unit": "percentunit", "noValue": "Needs both planes reporting" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 26 },
+      "id": 8,
+      "targets": [
+        {
+          "expr": "sum(rate(traces_spanmetrics_calls_total{service=\"praxis\", span_kind=\"SPAN_KIND_SERVER\"}[5m])) / clamp_min(sum(rate(praxis_http_requests_total[5m])), 0.0001)",
+          "legendFormat": "observed sampling ratio"
+        },
+        { "expr": "sum(rate(otelcol_exporter_send_failed_spans{exporter=\"otlp/tempo\"}[5m]))", "legendFormat": "spans FAILED to export" }
+      ],
+      "title": "Sampling Ratio Cross-Check (span plane / Prometheus plane)",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["praxis", "ai", "tokens", "spanmetrics"],
+  "time": { "from": "now-30m", "to": "now" },
+  "title": "Praxis AI Gateway Overview",
+  "uid": "praxis-ai-gateway-overview"
+}

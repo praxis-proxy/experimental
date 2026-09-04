@@ -1,0 +1,112 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "Trace Search",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 1 },
+      "id": 1,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true,
+        "sortBy": [{ "desc": true, "displayName": "Start time" }]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "queryType": "nativeSearch",
+          "serviceName": "praxis",
+          "limit": 20
+        }
+      ],
+      "title": "Recent Traces",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 13 },
+      "id": 2,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "queryType": "nativeSearch",
+          "serviceName": "praxis",
+          "search": "status=error",
+          "limit": 20
+        }
+      ],
+      "title": "Error Traces",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 13 },
+      "id": 3,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "queryType": "nativeSearch",
+          "serviceName": "praxis",
+          "minDuration": "100ms",
+          "limit": 20
+        }
+      ],
+      "title": "Slow Traces (>100ms)",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Spans the collector accepted but failed to deliver. Sustained non-zero means trace data is being silently discarded: an oversized batch rejected by Tempo is a permanent, non-retryable error, so the collector drops the WHOLE batch while every request still returns 200.",
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "0 - no export failures" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 23 },
+      "id": 101,
+      "targets": [
+        { "expr": "sum(rate(otelcol_exporter_send_failed_spans{exporter=\"otlp/tempo\"}[5m]))", "legendFormat": "send failed" },
+        { "expr": "sum(rate(otelcol_exporter_enqueue_failed_spans{exporter=\"otlp/tempo\"}[5m]))", "legendFormat": "enqueue failed" },
+        { "expr": "sum(rate(otelcol_processor_refused_spans[5m]))", "legendFormat": "refused (memory_limiter)" },
+        { "expr": "sum(rate(otelcol_exporter_sent_spans{exporter=\"otlp/tempo\"}[5m]))", "legendFormat": "sent OK" }
+      ],
+      "title": "Span Export Failures (collector -> Tempo)",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["praxis", "traces"],
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Praxis OTel Traces",
+  "uid": "praxis-traces"
+}

@@ -1,0 +1,77 @@
+# Praxis Deployment for the ai-gateway demo.
+# ConfigMap is created by the praxis-deploy stack (forge.yaml)
+# or by hand (see README step 9) when switching between configs/*.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: praxis-proxy
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: praxis-proxy
+  template:
+    metadata:
+      labels:
+        app: praxis-proxy
+    spec:
+      containers:
+        - name: praxis-proxy
+          image: praxis-experimental:ai-gw
+          # Explicit config path. The image's WORKDIR is /etc/praxis so the
+          # bare entrypoint would resolve praxis.yaml anyway, but relying on
+          # that is fragile -- state it where a reader of this manifest sees it.
+          args: ["-c", "/etc/praxis/praxis.yaml"]
+          ports:
+            - containerPort: 8080
+              name: proxy
+            - containerPort: 9901
+              name: admin
+          volumeMounts:
+            - name: config
+              mountPath: /etc/praxis
+          resources:
+            requests:
+              cpu: 500m
+              memory: 128Mi
+            limits:
+              cpu: "2"
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /healthy
+              port: admin
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthy
+              port: admin
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: praxis-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: praxis-proxy
+  namespace: default
+  labels:
+    app: praxis-proxy
+spec:
+  type: NodePort
+  selector:
+    app: praxis-proxy
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 30080
+      name: proxy
+    - port: 9901
+      targetPort: 9901
+      nodePort: 30901
+      name: admin
