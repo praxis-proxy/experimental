@@ -46,7 +46,9 @@ Pushing the tag runs the release pipeline
 2. Run the full test suite
 3. Verify every release crate packages cleanly
    (publish dry run)
-4. Build and publish the container image to GHCR
+4. Build and publish the multi-arch container image to
+   GHCR (the `publish-image` job calls the Publish
+   workflow once steps 1-3 pass)
 5. Create the GitHub release with generated notes
 
 Publishing to crates.io stays a manual step: the
@@ -57,11 +59,24 @@ and green.
 ## Publishing Container Images
 
 Container images are published to GitHub Container
-Registry (GHCR) by the release pipeline. Outside of a
-release, the **Publish** workflow
-(`.github/workflows/publish.yaml`) can be triggered
-manually via `workflow_dispatch` to publish from any
-branch or tag.
+Registry (GHCR) by the **Publish** workflow
+(`.github/workflows/publish.yaml`). It runs in three
+ways: the release pipeline calls it for a version tag
+after its gates pass, a push to `main` publishes the
+rolling `main` tag, and `workflow_dispatch` publishes
+from any branch or tag.
+
+Each image is built natively for `linux/amd64` and
+`linux/arm64` and merged into one manifest, so Apple
+Silicon and Arm servers pull without emulation.
+
+> The first publish creates the GHCR package, and a new
+> package is **private** by default -- it inherits the
+> repository's access permissions but not its
+> visibility. After the first successful run, a
+> maintainer must set the package public once, under
+> Packages -> experimental -> Package settings ->
+> Change visibility.
 
 ### Image Tags
 
@@ -73,9 +88,13 @@ The publish steps produce these tags per run:
 | `<branch>` | `main` | Branch name |
 | `<version>` | `0.1.0` | Full semver (from git tag) |
 | `<major>.<minor>` | `0.1` | Major.minor shorthand |
+| `latest` | `latest` | Newest non-prerelease version tag |
 
-Semver tags are only generated when the workflow runs
-against a semver git tag.
+Semver tags and `latest` are only produced when the
+workflow runs against a semver git tag; `latest` is
+skipped for pre-releases such as `v1.2.3-rc1`. Until the
+first release is tagged, `main` is the only tag that
+exists.
 
 ## Changelog
 

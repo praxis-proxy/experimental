@@ -101,29 +101,27 @@ jobs:
   # Build and publish container image
   # ----------------------------------------------------------------------------
 
-  container:
+  publish-image:
+    # publish.yaml builds amd64 and arm64 natively and merges them into one
+    # manifest. It is called from here rather than triggering on the tag
+    # itself: `needs` cannot cross workflow files, so a tag trigger there
+    # would publish an image for a tag whose tests failed.
     needs: [validate, test, publish-dry-run]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    uses: ./.github/workflows/publish.yaml
     permissions:
       contents: read
       packages: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Build and publish container
-        uses: ./.github/actions/ghcr-publish
-        with:
-          image-name: ${{ github.repository }}
 
   # ----------------------------------------------------------------------------
   # Create GitHub release
   # ----------------------------------------------------------------------------
 
   github-release:
-    needs: [validate, container]
+    # publish-image already needs validate/test/publish-dry-run, so this covers
+    # every gate transitively. Depending on it means a release is never cut for
+    # a tag whose image failed to build, which would leave `docker pull
+    # ...:X.Y.Z` returning manifest unknown next to a published release.
+    needs: [publish-image]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:

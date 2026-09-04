@@ -4,25 +4,90 @@ name: Publish
 # Workflow Settings
 # ------------------------------------------------------------------------------
 #
-# Manually triggered container publish to GHCR. Run against a semver tag
-# to produce version tags, or against a branch for sha/branch tags.
+# Builds and publishes multi-arch (linux/amd64 + linux/arm64) container images
+# to GHCR. Each architecture builds natively (ubuntu-24.04 / ubuntu-24.04-arm,
+# no QEMU) and pushes by digest; a merge job then combines both digests into a
+# single multi-arch manifest list tagged via docker/metadata-action. This is
+# the standard docker/build-push-action multi-arch pattern, followed closely:
+# https://docs.docker.com/build/ci/github-actions/multi-platform/
+#
+# The matrix is inlined rather than hidden behind a composite action: the
+# by-digest build and the manifest merge are two jobs on two runners, which a
+# composite (a step-level unit) cannot express. The repo's own
+# .github/actions/ghcr-publish had no platforms or build-args input and no
+# remaining callers, so it is deleted here. praxis core has the same arm64 gap
+# and consumes praxis-proxy/conventions' copy of that action; fixing it there
+# is a separate change to a shared repository.
+#
+# FEATURES=otel is passed as a build-arg so every published image ships with
+# the (config-gated) OTel support built in, rather than maintaining separate
+# variants. The Containerfile declares `ARG FEATURES` and records the value in
+# an io.praxis.build.features label, so what a pulled image contains is
+# inspectable rather than assumed.
+#
+# Triggers:
+#   push to main      -> :main, :sha-<short>
+#   release.yaml call -> :X.Y.Z, :X.Y, :latest, :sha-<short> (after its gates)
+#   workflow_dispatch -> tags reflect whatever ref it is run against
+#
+# Note that on a push to main this workflow and container.yaml build the same
+# amd64 image independently: this one publishes it, container.yaml smoke-tests
+# it. They are not linked, so :main can be republished on a commit whose smoke
+# test fails. Running the smoke test against the built digest before the merge
+# job would close that, and is worth doing separately.
+#
+# container.yaml remains the pull_request smoke test and is untouched; this
+# workflow never runs on pull_request.
+#
+# Version tags do not trigger this workflow directly. release.yaml calls it
+# after validate/test/publish-dry-run pass, because `needs` cannot cross
+# workflow files and a tag that fails its tests must not publish an image.
 
 on:
+  push:
+    branches: [main]
+    # Same list as container.yaml: a docs- or demo-only commit cannot change the
+    # binary, and republishing :main for it costs two native release builds.
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "demos/**"
+      - "LICENSE"
+      - ".gitignore"
+  workflow_call:
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  # Never cancel a publish. A multi-arch push has two phases -- per-arch
+  # digests, then the manifest that ties them together -- and cancelling
+  # between them leaves pushed digests with no tag pointing at them. A second
+  # push to the same ref queues behind the first instead.
+  cancel-in-progress: false
 
 permissions: {}
 
+env:
+  FEATURES: otel
+
 jobs:
   # ----------------------------------------------------------------------------
-  # Container Build & Publish
+  # Build & Push By Digest (per architecture, native runners)
   # ----------------------------------------------------------------------------
 
-  container:
-    runs-on: ubuntu-24.04
+  build:
+    strategy:
+      # Let the other architecture finish if one fails, so the failure is
+      # diagnosable in isolation. The merge job's `needs` still refuses to
+      # build a manifest from a partial matrix, so nothing half-built ships.
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runs-on: ubuntu-24.04
+          - platform: linux/arm64
+            runs-on: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -32,7 +97,138 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Build and publish container
-        uses: ./.github/actions/ghcr-publish
+      - name: Prepare platform pair
+        run: |
+          platform=${{ matrix.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
+
+      # Only the OCI labels are used here (source, revision, created); the
+      # tags come from the merge job, which is the one that names the image.
+      - name: Resolve image name
+        # github.repository preserves case, and a registry reference must be
+        # lowercase, so a run from a fork with a capitalised owner fails in
+        # buildx before it builds anything.
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          image-name: ${{ github.repository }}
+          images: ${{ env.IMAGE }}
+          # Same rules as the merge job. Only the labels baked into the per-arch
+          # images come from here, and they must name the version the merge job
+          # actually tags.
+          flavor: |
+            latest=false
+          tags: |
+            type=sha
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Containerfile
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            FEATURES=${{ env.FEATURES }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          # mode=min: the cargo build runs under `RUN --mount=type=cache`,
+          # and BuildKit does not export cache mounts to the GHA cache, so
+          # mode=max uploads every layer against the 10 GB repo budget for
+          # cache that cannot hold the expensive step anyway.
+          cache-to: type=gha,mode=min,scope=${{ matrix.platform }}
+
+      - name: Export digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          # Digests are consumed by the merge job in this same run; they have
+          # no value afterwards. One day still leaves room to re-run a failed
+          # merge job without rebuilding.
+          retention-days: 1
+
+  # ----------------------------------------------------------------------------
+  # Merge Digests Into A Multi-Arch Manifest
+  # ----------------------------------------------------------------------------
+
+  merge:
+    needs: [build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      packages: write
+    steps:
+      - name: Resolve image name
+        # github.repository preserves case, and a registry reference must be
+        # lowercase, so a run from a fork with a capitalised owner fails in
+        # buildx before it builds anything.
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Download digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: |
+            latest=false
+          tags: |
+            type=sha
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' && startsWith(github.ref_name, 'v') && !contains(github.ref_name, '-') }}
+
+      - name: Create manifest list and push
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          DOCKER_METADATA_OUTPUT_JSON: ${{ steps.meta.outputs.json }}
+        run: |
+          # shellcheck disable=SC2046 # word splitting is intentional: each
+          # $(...) expands to multiple `-t tag` / `image@digest` arguments.
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "$IMAGE@sha256:%s " *)
+
+      - name: Inspect image
+        run: docker buildx imagetools inspect "$IMAGE:${{ steps.meta.outputs.version }}"
