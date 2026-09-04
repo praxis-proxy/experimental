@@ -12,8 +12,9 @@ if [ ! -d "${RESULTS_DIR}" ]; then
 fi
 
 export RESULTS_DIR
-export BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-export COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+export BRANCH COMMIT
 
 # Auto-detect scenario from results directory contents
 if [ -f "${RESULTS_DIR}/ai-baseline-run1.json" ]; then

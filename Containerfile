@@ -46,6 +46,7 @@ RUN mkdir -p crates/experimental-probe/src \
     && printf '//! stub\nfn main() {}\n' > crates/praxis-experimental-server/src/main.rs
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/src/target \
     cargo build --release -p praxis-experimental-server ${FEATURES:+--features "$FEATURES"}
 
@@ -69,6 +70,7 @@ RUN find crates -name '*.rs' -exec touch {} +
 # ------------------------------------------------------------------------------
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/src/target \
     cargo build --release -p praxis-experimental-server ${FEATURES:+--features "$FEATURES"} \
     && cp target/release/praxis-experimental-server /usr/local/bin/praxis-experimental-server

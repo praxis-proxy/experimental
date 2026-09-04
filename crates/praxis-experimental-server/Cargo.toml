@@ -54,11 +54,13 @@ praxis-protocol = { version = "0.5.4", package = "praxis-proxy-protocol", featur
 # `http-callout-filter` is off by default upstream because its config surface is
 # still moving. This image exists to expose experimental work, so it is on here
 # — it is what backs the Lakera Guard example config.
-praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", tag = "v0.3.0", features = [
+# Pinned to the commit tagged v0.3.0. praxis-ai crates are not on crates.io,
+# and a rev cannot move the way a tag can. Bump deliberately.
+praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "b44360afb4100c5543b1180ac8df16e482978fc8", features = [
   "http-callout-filter",
   "praxis-main",
 ] }
 
 [build-dependencies]
 cargo_metadata = "0.23.1"
-praxis-ai-build-support = { git = "https://github.com/praxis-proxy/ai", tag = "v0.3.0" }
+praxis-ai-build-support = { git = "https://github.com/praxis-proxy/ai", rev = "b44360afb4100c5543b1180ac8df16e482978fc8" }

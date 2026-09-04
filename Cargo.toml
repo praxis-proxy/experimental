@@ -6,8 +6,6 @@ members = [
   "crates/praxis-experimental-server",
 ]
 
-# Use praxis main for OTel features not yet in the v0.5.3 crates.io release
-
 [workspace.package]
 version = "0.1.0"
 edition = "2024"

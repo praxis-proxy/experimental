@@ -2429,7 +2429,7 @@ dependencies = [
 [[package]]
 name = "praxis-ai-apis"
 version = "0.3.0"
-source = "git+https://github.com/praxis-proxy/ai?tag=v0.3.0#b44360afb4100c5543b1180ac8df16e482978fc8"
+source = "git+https://github.com/praxis-proxy/ai?rev=b44360afb4100c5543b1180ac8df16e482978fc8#b44360afb4100c5543b1180ac8df16e482978fc8"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2459,7 +2459,7 @@ dependencies = [
 [[package]]
 name = "praxis-ai-build-support"
 version = "0.3.0"
-source = "git+https://github.com/praxis-proxy/ai?tag=v0.3.0#b44360afb4100c5543b1180ac8df16e482978fc8"
+source = "git+https://github.com/praxis-proxy/ai?rev=b44360afb4100c5543b1180ac8df16e482978fc8#b44360afb4100c5543b1180ac8df16e482978fc8"
 dependencies = [
  "cargo_metadata",
 ]
@@ -2467,7 +2467,7 @@ dependencies = [
 [[package]]
 name = "praxis-ai-filters"
 version = "0.3.0"
-source = "git+https://github.com/praxis-proxy/ai?tag=v0.3.0#b44360afb4100c5543b1180ac8df16e482978fc8"
+source = "git+https://github.com/praxis-proxy/ai?rev=b44360afb4100c5543b1180ac8df16e482978fc8#b44360afb4100c5543b1180ac8df16e482978fc8"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -2503,7 +2503,7 @@ dependencies = [
 [[package]]
 name = "praxis-ai-proxy"
 version = "0.3.0"
-source = "git+https://github.com/praxis-proxy/ai?tag=v0.3.0#b44360afb4100c5543b1180ac8df16e482978fc8"
+source = "git+https://github.com/praxis-proxy/ai?rev=b44360afb4100c5543b1180ac8df16e482978fc8#b44360afb4100c5543b1180ac8df16e482978fc8"
 dependencies = [
  "cargo_metadata",
  "clap",
