@@ -29,10 +29,11 @@ if ! kill -0 "$MOCKS_PID" 2>/dev/null; then
   exit 1
 fi
 
-FILTER_SRC="${REPO_ROOT}/crates/praxis-experimental-filters/src/switchyard_route.rs"
+FILTER_SRC_DIR="${REPO_ROOT}/crates/praxis-experimental-filters/src"
+NEWER_SRC=$(find "$FILTER_SRC_DIR" -name '*.rs' -newer "$SERVER_BIN" -print -quit 2>/dev/null || true)
 if [[ "${FORCE_REBUILD:-}" == "1" ]] \
   || [[ ! -x "$SERVER_BIN" ]] \
-  || [[ "$FILTER_SRC" -nt "$SERVER_BIN" ]]; then
+  || [[ -n "$NEWER_SRC" ]]; then
   echo "building praxis-experimental-server..." >&2
   (cd "$REPO_ROOT" && cargo build -p praxis-experimental-server)
 fi
@@ -65,7 +66,7 @@ for _ in $(seq 1 60); do
 done
 
 ask() {
-  local label=$1 prompt=$2 tmp body http
+  local label=$1 prompt=$2 session=${3:-} tmp body http curl_args
   tmp=$(mktemp)
   body=$(PROMPT="$prompt" python3 - <<'PY'
 import json, os
@@ -79,8 +80,13 @@ PY
 )
   echo "--- ${label} ---"
   echo "prompt: ${prompt}"
-  http=$(curl -sS -m 60 -o "$tmp" -w '%{http_code}' -X POST "$GATEWAY" \
-    -H 'content-type: application/json' -d "$body" || true)
+  curl_args=(-sS -m 60 -o "$tmp" -w '%{http_code}' -X POST "$GATEWAY" \
+    -H 'content-type: application/json')
+  if [[ -n "$session" ]]; then
+    echo "session: ${session}"
+    curl_args+=(-H "x-switchyard-session-id: ${session}")
+  fi
+  http=$(curl "${curl_args[@]}" -d "$body" || true)
   echo "HTTP ${http}"
   if [[ -s "$tmp" ]]; then
     python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r["choices"][0]["message"]["content"][:200])' "$tmp" 2>/dev/null \
@@ -90,6 +96,12 @@ PY
     echo "(empty body — see server.log)"
   fi
   rm -f "$tmp"
+}
+
+set_judge() {
+  local state=$1
+  curl -sS -m 5 -o /dev/null -X POST "http://127.0.0.1:18091/control/${state}"
+  echo "judge: ${state}"
 }
 
 echo "=== easy (expect weak) ==="
@@ -102,9 +114,16 @@ ask hard1 'Reverse-engineer an undocumented legacy billing service with no harne
 ask hard2 'From a blurry whiteboard photo with no image or OCR, recover every equation.'
 ask hard3 'Reproduce undocumented acme-vision tensor layouts with no golden files.'
 
+echo "=== mid-session judge down (expect reuse Strong, then default Strong) ==="
+ask session-hard 'Reverse-engineer an undocumented legacy billing service with no harness.' demo-anti-thrash
+set_judge down
+ask session-easy-after-down 'What is 2+2?' demo-anti-thrash
+ask empty-store-while-down 'What is the capital of France?' demo-empty-store
+set_judge up
+
 echo
 echo "routing decisions (ignore warmup):"
-grep -E 'switchyard_route: (judge verdict|routed|routing failed|fail-open)' /tmp/switchyard-demo-server.log || true
+grep -E 'switchyard_route: (judge verdict|routed|reuse|default_strong|routing failed|fail-open)' /tmp/switchyard-demo-server.log || true
 echo
-echo "upstreams (4× weak = warmup + 3 easy, then 3× strong):"
+echo "upstreams (4× weak = warmup + 3 easy; 3 one-shot hard + session-hard + reuse + default Strong):"
 grep -nE 'weak-upstream|strong-upstream' /tmp/switchyard-demo-mocks.log || true

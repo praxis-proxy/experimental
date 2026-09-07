@@ -40,3 +40,4 @@ filter_chains:
 # Loopback-only demo; allow_root for UID 0 CI/container shells.
 insecure_options:
   allow_root: true
+  allow_private_endpoints: true

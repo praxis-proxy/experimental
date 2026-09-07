@@ -1,8 +1,8 @@
 //! `switchyard_route`: Mixture-of-Models routing via NVIDIA `NeMo` Switchyard
 //! (Capability mode). Decision-only: judge → weak/strong tier → cluster+model.
 //!
-//! Demo: `judge verdict` / `routed` debug lines are grepped by
-//! `demos/switchyard-route/run-demo.sh`.
+//! Demo greps `judge verdict` / `routed` / `reuse` / `default_strong` /
+//! `routing failed` / `fail-open` in `demos/switchyard-route/run-demo.sh`.
 
 #![expect(
     clippy::large_futures,
@@ -12,8 +12,13 @@
 )]
 
 mod config;
+mod failure;
+mod session;
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, Mutex, MutexGuard},
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -28,6 +33,12 @@ use self::config::{FailureMode, RouteConfig, Tier};
 /// Metadata key for the chosen cluster (body phase → `on_request`).
 const METADATA_CLUSTER: &str = "switchyard_route.cluster";
 
+/// Why this request used a cluster: live route, reuse, default Strong, …
+const METADATA_DECISION: &str = "switchyard_route.decision";
+
+/// Truncated routing error; set on every judge/decode failure.
+const METADATA_ERROR: &str = "switchyard_route.error";
+
 /// Default max body size for buffering (1 MiB).
 const DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
 
@@ -37,6 +48,8 @@ pub(crate) struct SwitchyardRouteFilter {
     config: RouteConfig,
     /// The Capability-mode classifier, built once at config time.
     algorithm: Arc<dyn Algorithm>,
+    /// Last successful judge tier per session key (in-process, TTL + cap).
+    sessions: Mutex<session::SessionStore>,
 }
 
 impl std::fmt::Debug for SwitchyardRouteFilter {
@@ -57,7 +70,11 @@ impl SwitchyardRouteFilter {
     pub(crate) fn from_config(yaml: &serde_yaml::Value) -> Result<Box<dyn HttpFilter>, FilterError> {
         let config = config::parse(yaml)?;
         let algorithm = build_algorithm(&config)?;
-        Ok(Box::new(Self { config, algorithm }))
+        Ok(Box::new(Self {
+            config,
+            algorithm,
+            sessions: Mutex::new(session::SessionStore::with_defaults()),
+        }))
     }
 
     /// Runs the routing decision: parse body, call judge, pick tier, rewrite.
@@ -70,27 +87,85 @@ impl SwitchyardRouteFilter {
             return Err(RouteError::UnsupportedPath);
         }
 
-        // Decode for judge
+        let session_key = session::session_key_from_request(&ctx.request.headers, &value);
         let llm_request = decode_for_judge(&value)?;
-
-        // Get subrequest client for judge callout
         let client = ctx
             .subrequest_client
             .as_ref()
             .ok_or(RouteError::MissingSubrequestClient)?;
-
-        // Run Switchyard decision loop
         let tier = self.decide(client, llm_request).await?;
-
-        // Rewrite model in body
-        let target = self.config.target(tier);
-        let new_body = rewrite_model(value, &target.model)?;
-        *body = Some(Bytes::from(new_body));
-
-        // Stash cluster for on_request
-        ctx.set_metadata(METADATA_CLUSTER, target.cluster.clone());
-
+        let cluster = rewrite_for_tier(&self.config, body, value, tier)?;
+        ctx.set_metadata(METADATA_CLUSTER, cluster);
+        ctx.set_metadata(METADATA_DECISION, failure::DECISION_ROUTED);
+        if let Some(key) = session_key {
+            self.lock_sessions().remember(&key, tier, Instant::now());
+        }
         Ok(tier)
+    }
+
+    /// Recovers from a poisoned mutex so one panicked request cannot stick the filter.
+    fn lock_sessions(&self) -> MutexGuard<'_, session::SessionStore> {
+        self.sessions.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Looks up the last real judge success for this request's session key.
+    fn lookup_remembered(&self, ctx: &HttpFilterContext<'_>, body: Option<&Bytes>) -> Option<Tier> {
+        let value = parse_body(body).ok()?;
+        let key = session::session_key_from_request(&ctx.request.headers, &value)?;
+        self.lock_sessions().last_success(&key, Instant::now())
+    }
+
+    /// Records the error and applies `on_failure` (reuse / default Strong / 503 / unrouted).
+    fn on_route_error(
+        &self,
+        ctx: &mut HttpFilterContext<'_>,
+        body: &mut Option<Bytes>,
+        err: &RouteError,
+    ) -> FilterAction {
+        warn!(error = %err, "switchyard_route: routing failed");
+        record_error_metadata(ctx, err);
+        let may_apply = err.may_apply_failure_tier();
+        let remembered = may_apply.then(|| self.lookup_remembered(ctx, body.as_ref())).flatten();
+        self.dispatch_failure(ctx, body, may_apply, remembered)
+    }
+
+    /// Maps a failure disposition onto HTTP continue / 503 / rewrite.
+    fn dispatch_failure(
+        &self,
+        ctx: &mut HttpFilterContext<'_>,
+        body: &mut Option<Bytes>,
+        may_apply: bool,
+        remembered: Option<Tier>,
+    ) -> FilterAction {
+        match failure::failure_action(self.config.on_failure, may_apply, remembered) {
+            failure::FailureAction::Reject => reject_closed(ctx),
+            failure::FailureAction::Unrouted => fail_open_unrouted(ctx),
+            failure::FailureAction::Apply(apply) => self.apply_failure_tier(ctx, body, apply),
+        }
+    }
+
+    /// Rewrites `model` and cluster metadata for an `open` failure apply.
+    fn apply_failure_tier(
+        &self,
+        ctx: &mut HttpFilterContext<'_>,
+        body: &mut Option<Bytes>,
+        apply: failure::FailureApply,
+    ) -> FilterAction {
+        let Ok(value) = parse_body(body.as_ref()) else {
+            return fail_open_or_reject(ctx, self.config.on_failure);
+        };
+        match rewrite_for_tier(&self.config, body, value, apply.tier) {
+            Ok(cluster) => {
+                ctx.set_metadata(METADATA_CLUSTER, cluster);
+                ctx.set_metadata(METADATA_DECISION, apply.kind.metadata());
+                log_failure_apply(apply);
+                FilterAction::Continue
+            },
+            Err(err) => {
+                debug!(error = %err, "switchyard_route: fallback rewrite failed");
+                fail_open_or_reject(ctx, self.config.on_failure)
+            },
+        }
     }
 
     /// Drives Switchyard's step stream to get a routing decision.
@@ -310,26 +385,10 @@ impl HttpFilter for SwitchyardRouteFilter {
 
         match self.route(ctx, body).await {
             Ok(tier) => {
-                // Demo: `run-demo.sh` greps `switchyard_route: routed`.
                 debug!(tier = %tier.tag(), "switchyard_route: routed");
                 Ok(FilterAction::Continue)
             },
-            Err(err) => {
-                // Demo: `run-demo.sh` greps `switchyard_route: routing failed`.
-                warn!(error = %err, "switchyard_route: routing failed");
-                let short = err.to_string();
-                let short: String = short.chars().take(250).collect();
-                ctx.set_metadata("switchyard_route.error", short);
-
-                match self.config.on_failure {
-                    FailureMode::Open => {
-                        // Demo: `run-demo.sh` greps `switchyard_route: fail-open`.
-                        debug!("switchyard_route: fail-open, passing through");
-                        Ok(FilterAction::Continue)
-                    },
-                    FailureMode::Closed => Ok(FilterAction::Reject(Rejection::status(503))),
-                }
-            },
+            Err(err) => Ok(self.on_route_error(ctx, body, &err)),
         }
     }
 
@@ -535,6 +594,58 @@ fn rewrite_model(mut body: serde_json::Value, model: &str) -> Result<Vec<u8>, Ro
     serde_json::to_vec(&body).map_err(|err| RouteError::Serialize(err.to_string()))
 }
 
+/// Rewrites the buffered JSON to the tier's model and returns the cluster name.
+fn rewrite_for_tier(
+    config: &RouteConfig,
+    body: &mut Option<Bytes>,
+    value: serde_json::Value,
+    tier: Tier,
+) -> Result<String, RouteError> {
+    let target = config.target(tier);
+    let new_body = rewrite_model(value, &target.model)?;
+    *body = Some(Bytes::from(new_body));
+    Ok(target.cluster.clone())
+}
+
+/// Truncates a routing error for `switchyard_route.error` metadata.
+fn record_error_metadata(ctx: &mut HttpFilterContext<'_>, err: &RouteError) {
+    let short: String = err.to_string().chars().take(250).collect();
+    ctx.set_metadata(METADATA_ERROR, short);
+}
+
+/// HTTP 503 for `on_failure: closed`.
+fn reject_closed(ctx: &mut HttpFilterContext<'_>) -> FilterAction {
+    ctx.set_metadata(METADATA_DECISION, failure::DECISION_REJECTED);
+    FilterAction::Reject(Rejection::status(503))
+}
+
+/// Continue without a Switchyard cluster (`open` and we cannot rewrite).
+fn fail_open_unrouted(ctx: &mut HttpFilterContext<'_>) -> FilterAction {
+    ctx.set_metadata(METADATA_DECISION, failure::DECISION_UNROUTED);
+    debug!("switchyard_route: fail-open, passing through");
+    FilterAction::Continue
+}
+
+/// When rewrite itself fails, fall back to plain open/closed.
+fn fail_open_or_reject(ctx: &mut HttpFilterContext<'_>, mode: FailureMode) -> FilterAction {
+    match mode {
+        FailureMode::Closed => reject_closed(ctx),
+        FailureMode::Open => fail_open_unrouted(ctx),
+    }
+}
+
+/// Demo-greppable log line for reuse vs default Strong.
+fn log_failure_apply(apply: failure::FailureApply) {
+    match apply.kind {
+        failure::FailureApplyKind::Reuse => {
+            debug!(tier = %apply.tier.tag(), "switchyard_route: reuse");
+        },
+        failure::FailureApplyKind::DefaultStrong => {
+            debug!(tier = %apply.tier.tag(), "switchyard_route: default_strong");
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -574,6 +685,21 @@ enum RouteError {
     UnknownTier(String),
 }
 
+impl RouteError {
+    /// Whether this failure is a chat request we may rewrite to a fallback tier.
+    fn may_apply_failure_tier(&self) -> bool {
+        match self {
+            Self::Body(_) | Self::Json(_) | Self::UnsupportedPath | Self::Serialize(_) => false,
+            Self::Translation(_)
+            | Self::MissingSubrequestClient
+            | Self::Judge(_)
+            | Self::Run(_)
+            | Self::NoDecision
+            | Self::UnknownTier(_) => true,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -581,6 +707,8 @@ enum RouteError {
 #[cfg(test)]
 mod tests {
     use praxis_filter::FilterRegistry;
+
+    use super::RouteError;
 
     #[test]
     fn filter_is_registered() {
@@ -590,6 +718,38 @@ mod tests {
         assert!(
             names.contains(&"switchyard_route"),
             "expected switchyard_route in {names:?}"
+        );
+    }
+
+    #[test]
+    fn judge_failures_may_apply_a_fallback_tier() {
+        assert!(
+            RouteError::Judge("down".into()).may_apply_failure_tier(),
+            "judge HTTP errors are the mid-session failure path"
+        );
+        assert!(
+            RouteError::NoDecision.may_apply_failure_tier(),
+            "a missing verdict is still a judge-path failure"
+        );
+        assert!(
+            RouteError::MissingSubrequestClient.may_apply_failure_tier(),
+            "no callout client is treated like an unreachable judge"
+        );
+    }
+
+    #[test]
+    fn bad_bodies_and_wrong_paths_stay_unrouted() {
+        assert!(
+            !RouteError::UnsupportedPath.may_apply_failure_tier(),
+            "non-chat paths must not be rewritten to Strong"
+        );
+        assert!(
+            !RouteError::Json("nope".into()).may_apply_failure_tier(),
+            "invalid JSON cannot be rewritten"
+        );
+        assert!(
+            !RouteError::Body("empty").may_apply_failure_tier(),
+            "missing bodies cannot be rewritten"
         );
     }
 }

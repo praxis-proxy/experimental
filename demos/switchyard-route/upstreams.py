@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 JUDGE_PORT, WEAK_PORT, STRONG_PORT = 18091, 18092, 18093
+_judge_down = threading.Event()
 
 # Markers that flip the mock judge to LIM-2 / p_solve=0 (demo hard prompts).
 _HARD_MARKERS = (
@@ -33,9 +34,11 @@ def _read_json(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _write_json(handler: BaseHTTPRequestHandler, payload: dict[str, Any]) -> None:
+def _write_json(
+    handler: BaseHTTPRequestHandler, payload: dict[str, Any], status: int = 200
+) -> None:
     body = json.dumps(payload).encode()
-    handler.send_response(200)
+    handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
@@ -86,13 +89,34 @@ def _chat_completion(model: str, content: str) -> dict[str, Any]:
     }
 
 
+def _request_path(handler: BaseHTTPRequestHandler) -> str:
+    return handler.path.split("?", 1)[0]
+
+
 def judge_handler() -> type[BaseHTTPRequestHandler]:
     class Judge(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
-            if not self.path.startswith("/v1/chat/completions"):
+            path = _request_path(self)
+            if path == "/control/down":
+                _read_json(self)
+                _judge_down.set()
+                print("[judge] down", flush=True)
+                _write_json(self, {"judge": "down"})
+                return
+            if path == "/control/up":
+                _read_json(self)
+                _judge_down.clear()
+                print("[judge] up", flush=True)
+                _write_json(self, {"judge": "up"})
+                return
+            if not path.startswith("/v1/chat/completions"):
                 self.send_error(404)
                 return
             body = _read_json(self)
+            if _judge_down.is_set():
+                print("[judge] refusing (down)", flush=True)
+                _write_json(self, {"error": "judge down"}, status=503)
+                return
             prompt = _latest_user_text(body)
             match = re.search(r"(?is)user:\s*(.+)$", prompt)
             if match:

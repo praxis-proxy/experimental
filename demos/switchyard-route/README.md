@@ -10,8 +10,14 @@ No Kubernetes cluster and no real LLM — only loopback mocks.
 
 1. Three easy prompts → `served_by=weak-upstream`
 2. Three hard prompts → `served_by=strong-upstream`
-3. Gateway logs with `switchyard_route: judge verdict` / `routed`
-4. Mock logs showing judge `p_solve` and which upstream answered
+3. Mid-session: hard turn with `x-switchyard-session-id`, then judge down,
+   then an easy turn on the **same** session → still `served_by=strong-upstream`
+   and a `switchyard_route: reuse` log (not a fresh Weak verdict)
+4. A **new** session while the judge is still down → Strong with
+   `switchyard_route: default_strong` (empty store; not written as a success)
+5. Gateway logs with `switchyard_route: judge verdict` / `routed` / `reuse` /
+   `default_strong`
+6. Mock logs showing judge `p_solve` and which upstream answered
 
 ## Quick start
 
@@ -26,20 +32,24 @@ The script:
 2. Builds `praxis-experimental-server` if needed
 3. Renders `praxis.yaml` from `praxis.yaml.template`
 4. Starts the gateway on `:18080`
-5. Sends 3 easy + 3 hard prompts and greps the logs
+5. Sends 3 easy + 3 hard prompts, then the mid-session judge-down scenario,
+   and greps the logs
 
 ## Ports
 
 | Role | Port | Behavior |
 | --- | --- | --- |
 | Gateway | `:18080` | Praxis + `switchyard_route` + `load_balancer` |
-| Judge | `:18091` | Easy → `p_solve=0.95` / `SUP-1`; hard markers → `0.0` / `LIM-2` |
+| Judge | `:18091` | Easy → `p_solve=0.95` / `SUP-1`; hard markers → `0.0` / `LIM-2`. `POST /control/down` and `/control/up` toggle 503s |
 | Weak upstream | `:18092` | Echo `served_by=weak-upstream` |
 | Strong upstream | `:18093` | Echo `served_by=strong-upstream` |
 
 Hard prompts include markers such as `undocumented`, `blurry`, `whiteboard`
 (see `_HARD_MARKERS` in `upstreams.py`). With `threshold: 0.8` in the demo
 YAML, `0.95` routes weak and `0.0` routes strong.
+
+The demo YAML uses `on_failure: open`. `closed` (HTTP 503, ignore the map) is
+covered by unit tests, not this script.
 
 ## Files
 
@@ -58,6 +68,9 @@ To run the three mock servers without Praxis:
 ```console
 python3 upstreams.py
 ```
+
+Then `curl -X POST http://127.0.0.1:18091/control/down` to make the judge
+return 503.
 
 ## Layout (request path)
 
