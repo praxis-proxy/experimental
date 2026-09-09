@@ -25,11 +25,11 @@ For the core (non-AI) proxy benchmark, see [README-core.md](README-core.md).
 3. [Helm](https://helm.sh/) with repos added (step 1 below)
 4. [vegeta](https://github.com/tsenart/vegeta) (for benchmarks)
 5. `python3` (used by `scripts/report.sh`)
-6. [Praxis Forge CLI](https://github.com/praxis-proxy/forge) with
-   `extraPortMappings` support (praxis-proxy/forge#16):
+6. [Praxis Forge CLI](https://github.com/praxis-proxy/forge) — needs
+   `extraPortMappings`, merged in praxis-proxy/forge#16:
 
    ```bash
-   cargo install --locked --git https://github.com/praxis-proxy/forge --branch feat/extra-port-mappings-v2
+   cargo install --locked --git https://github.com/praxis-proxy/forge
    ```
 
    Verify: `praxis-forge doctor`

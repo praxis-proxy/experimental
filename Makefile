@@ -13,6 +13,8 @@ PUBLISH_CRATES   := experimental-probe
 # Tools verified by check-prereqs before their consuming targets run.
 LINT_CMDS        := cargo cargo-machete
 LINT_EXTRA_CMDS  := typos taplo shellcheck actionlint
+# Cargo features for the container image, e.g. `make container FEATURES=otel`.
+FEATURES         ?=
 AUDIT_CMDS       := cargo-audit cargo-deny
 KIND_CLUSTER_NAME ?= praxis-dev
 PROJECT_IMAGE    ?= ghcr.io/praxis-proxy/experimental:dev
@@ -110,7 +112,7 @@ lint: check-prereqs check-prereqs-nightly
 lint-extra: check-prereqs-extra
 	typos
 	taplo fmt --check
-	shellcheck hack/*.sh .hooks/pre-commit
+	shellcheck hack/*.sh .hooks/pre-commit demos/*/scripts/*.sh
 	actionlint
 
 fmt: check-prereqs-nightly
@@ -160,10 +162,10 @@ ifndef CONTAINER_ENGINE
 endif
 
 container: | require-container-engine
-	$(CONTAINER_ENGINE) build -t $(PROJECT_IMAGE) -f Containerfile .
+	$(CONTAINER_ENGINE) build $(if $(FEATURES),--build-arg FEATURES=$(FEATURES)) -t $(PROJECT_IMAGE) -f Containerfile .
 
 images: | require-container-engine
-	$(CONTAINER_ENGINE) build -t $(PROJECT_IMAGE) -f Containerfile .
+	$(CONTAINER_ENGINE) build $(if $(FEATURES),--build-arg FEATURES=$(FEATURES)) -t $(PROJECT_IMAGE) -f Containerfile .
 
 # -------------------------------------------------------------------
 # KIND
@@ -186,7 +188,7 @@ dev-env: images
 	bash hack/setup-kind.sh
 
 dev-push: | require-container-engine
-	$(CONTAINER_ENGINE) build -t $(PROJECT_IMAGE) -f Containerfile .
+	$(CONTAINER_ENGINE) build $(if $(FEATURES),--build-arg FEATURES=$(FEATURES)) -t $(PROJECT_IMAGE) -f Containerfile .
 	kind load docker-image $(PROJECT_IMAGE) --name $(KIND_CLUSTER_NAME)
 
 dev-integration:

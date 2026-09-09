@@ -14,6 +14,15 @@ data:
             endpoint: 0.0.0.0:4318
 
     processors:
+      # First in the pipeline. The container is limited to 512Mi; without this,
+      # exporter backpressure grows the queue until the kernel kills the collector
+      # and every buffered span is lost. With it, the collector refuses new spans
+      # near the limit and counts them in otelcol_processor_refused_spans, which
+      # the Span Export Failures panel shows.
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 400
+        spike_limit_mib: 100
       batch:
         timeout: 5s
         # send_batch_size is only a FLUSH TRIGGER, not a cap -- a flush already
@@ -47,7 +56,7 @@ data:
       pipelines:
         traces:
           receivers: [otlp]
-          processors: [batch]
+          processors: [memory_limiter, batch]
           exporters: [debug, otlp/tempo]
 ---
 apiVersion: apps/v1

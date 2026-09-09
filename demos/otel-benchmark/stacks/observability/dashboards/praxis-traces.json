@@ -95,9 +95,10 @@
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 23 },
       "id": 101,
       "targets": [
-        { "expr": "sum(rate(otelcol_exporter_send_failed_spans[5m]))", "legendFormat": "send failed" },
-        { "expr": "sum(rate(otelcol_exporter_enqueue_failed_spans[5m]))", "legendFormat": "enqueue failed" },
-        { "expr": "sum(rate(otelcol_exporter_sent_spans[5m]))", "legendFormat": "sent OK" }
+        { "expr": "sum(rate(otelcol_exporter_send_failed_spans{exporter=\"otlp/tempo\"}[5m]))", "legendFormat": "send failed" },
+        { "expr": "sum(rate(otelcol_exporter_enqueue_failed_spans{exporter=\"otlp/tempo\"}[5m]))", "legendFormat": "enqueue failed" },
+        { "expr": "sum(rate(otelcol_processor_refused_spans[5m]))", "legendFormat": "refused (memory_limiter)" },
+        { "expr": "sum(rate(otelcol_exporter_sent_spans{exporter=\"otlp/tempo\"}[5m]))", "legendFormat": "sent OK" }
       ],
       "title": "Span Export Failures (collector -> Tempo)",
       "type": "timeseries"

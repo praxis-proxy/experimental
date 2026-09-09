@@ -73,19 +73,8 @@ case "${SCENARIO}" in
     SCENARIO_TITLE="AI "
     REPORT_SCRIPT="report.sh"
     ;;
-  ai-extended)
-    RATE="${RATE:-500}"
-    CONNECTIONS=100
-    WARMUP_RATE=100
-    CONFIGS=(ai-extended-baseline ai-extended-baseline ai-extended-otel-full)
-    LABELS=(ai-ext-baseline ai-ext-otel-noop ai-ext-otel-full)
-    RESULTS_PREFIX="ai-ext-"
-    TARGET_FN=ai_target
-    SCENARIO_TITLE="AI Extended "
-    REPORT_SCRIPT="report.sh"
-    ;;
   *)
-    echo "Usage: $0 [--scenario core|ai|ai-extended]" >&2
+    echo "Usage: $0 [--scenario core|ai]" >&2
     exit 1
     ;;
 esac
@@ -108,9 +97,6 @@ run_vegeta() {
     tee "${RESULTS_DIR}/${label}-run${run}.bin" | \
     vegeta report -type=json > "${RESULTS_DIR}/${label}-run${run}.json"
   vegeta report < "${RESULTS_DIR}/${label}-run${run}.bin"
-  # Capture resource snapshot
-  kubectl --context "${CTX}" top pod -n default --no-headers 2>/dev/null \
-    >> "${RESULTS_DIR}/${label}-resources.txt" || true
   echo ""
 }
 
