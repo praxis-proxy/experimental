@@ -81,6 +81,8 @@ stop_server() {
     fi
     sleep 0.1
   done
+  echo "port 18080 never freed after 5s" >&2
+  exit 1
 }
 
 echo "mode: local mocks (judge :18091, weak :18092, strong :18093)" >&2
@@ -107,7 +109,8 @@ sleep 0.2
 start_server
 
 ask() {
-  local label=$1 prompt=$2 session=${3:-} tmp body http curl_args
+  local label=$1 prompt=$2 session=${3:-} expected_upstream=${4:-}
+  local tmp body http curl_args
   tmp=$(mktemp)
   body=$(PROMPT="$prompt" python3 - <<'PY'
 import json, os
@@ -135,6 +138,12 @@ PY
     echo
   else
     echo "(empty body — see server.log)"
+  fi
+  if [[ -n "$expected_upstream" ]] \
+    && ! grep -qF "served_by=${expected_upstream}" "$tmp"; then
+    echo "${label} expected ${expected_upstream}" >&2
+    rm -f "$tmp"
+    return 1
   fi
   rm -f "$tmp"
 }
@@ -176,10 +185,10 @@ ask floor-easy 'Count to three.' demo-floor
 echo "logs:"
 print_route_logs 2
 print_judge_preview 'Count to three.'
-ask floor-hard 'Reverse-engineer an undocumented legacy billing service with no harness.' demo-floor
+ask floor-hard 'Reverse-engineer an undocumented legacy routing service with no harness.' demo-floor
 echo "logs:"
 print_route_logs 2
-print_judge_preview 'Reverse-engineer an undocumented legacy billing service with no harness.'
+print_judge_preview 'Reverse-engineer an undocumented legacy routing service with no harness.'
 ask floor-stay 'Thanks, just say ok.' demo-floor
 echo "logs:"
 print_route_logs 1
@@ -197,8 +206,8 @@ stop_server
 render_config disabled
 echo "session_floor: disabled" >&2
 start_server append
-ask disabled-hard 'Reverse-engineer an undocumented legacy billing service with no harness.' demo-no-floor
-ask disabled-easy 'What colour is the sky?' demo-no-floor
+ask disabled-hard 'Reverse-engineer an undocumented legacy logging service with no harness.' demo-no-floor
+ask disabled-easy 'What colour is the sky?' demo-no-floor weak-upstream
 
 echo
 echo "routing decisions (ignore warmup):"

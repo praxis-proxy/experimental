@@ -31,8 +31,8 @@ No Kubernetes cluster and no real LLM — only loopback mocks.
 8. Mock logs showing judge `p_solve` and which upstream answered
 
 The script fails if `floor_skip`, `reuse`, or `default_strong` are missing,
-if the floor-stay prompt reached the judge, or if the disabled-easy prompt
-did not reach the judge.
+if the floor-stay prompt reached the judge, if the disabled-easy prompt did
+not reach the judge, or if that prompt was not served by the Weak upstream.
 
 ## Quick start
 

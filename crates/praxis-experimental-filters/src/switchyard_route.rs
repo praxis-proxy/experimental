@@ -92,13 +92,13 @@ impl SwitchyardRouteFilter {
         }
 
         let session_key = session::session_key_from_request(&ctx.request.headers, &value);
-        let now = Instant::now();
+        let lookup_time = Instant::now();
 
         // Floor optimization: if the session floor is already at max, skip the judge.
         if self.config.session_floor == SessionFloor::Enabled
             && let Some(key) = &session_key
         {
-            let floor = self.lock_sessions().last_success(key, now);
+            let floor = self.lock_sessions().last_success(key, lookup_time);
             if let Some(floor) = floor.filter(|tier| tier.is_max()) {
                 let cluster = rewrite_for_tier(&self.config, body, value, floor)?;
                 ctx.set_metadata(METADATA_CLUSTER, cluster);
@@ -117,9 +117,10 @@ impl SwitchyardRouteFilter {
         let cluster = rewrite_for_tier(&self.config, body, value, tier)?;
         ctx.set_metadata(METADATA_CLUSTER, cluster);
         ctx.set_metadata(METADATA_DECISION, failure::DECISION_ROUTED);
+        debug!(tier = %tier.tag(), "switchyard_route: routed");
         if let Some(key) = session_key {
             self.lock_sessions()
-                .remember(&key, tier, now, self.config.session_floor);
+                .remember(&key, tier, Instant::now(), self.config.session_floor);
         }
         Ok(tier)
     }
@@ -149,7 +150,7 @@ impl SwitchyardRouteFilter {
             failure::FailureAction::Unrouted => fail_open_unrouted(ctx),
             failure::FailureAction::Apply(apply) => match parsed {
                 Some(value) => self.apply_failure_tier(ctx, body, apply, value),
-                None => fail_open_unrouted(ctx),
+                None => unreachable!("Apply requires a successfully parsed request body"),
             },
         }
     }
@@ -395,12 +396,7 @@ impl HttpFilter for SwitchyardRouteFilter {
         }
 
         match self.route(ctx, body).await {
-            Ok(tier) => {
-                if ctx.get_metadata(METADATA_DECISION) != Some(failure::DECISION_FLOOR_SKIP) {
-                    debug!(tier = %tier.tag(), "switchyard_route: routed");
-                }
-                Ok(FilterAction::Continue)
-            },
+            Ok(_) => Ok(FilterAction::Continue),
             Err(err) => Ok(self.on_route_error(ctx, body, &err)),
         }
     }
@@ -872,6 +868,17 @@ mod tests {
     fn make_filter_with_floor(endpoint: &str, on_failure: &str, session_floor: &str) -> Box<dyn HttpFilter> {
         SwitchyardRouteFilter::from_config(&config_yaml_full(endpoint, on_failure, session_floor))
             .expect("test filter config is valid")
+    }
+
+    /// Builds a filter with a short session TTL for route-level expiry tests.
+    fn make_filter_with_ttl(endpoint: &str, ttl: Duration) -> Box<dyn HttpFilter> {
+        let config = config::parse(&config_yaml(endpoint, "open")).expect("test config is valid");
+        let algorithm = build_algorithm(&config).expect("test algorithm builds");
+        Box::new(SwitchyardRouteFilter {
+            config,
+            algorithm,
+            sessions: Mutex::new(session::SessionStore::new(ttl, 8)),
+        })
     }
 
     /// A minimal `OpenAI` chat request body.
@@ -2049,6 +2056,91 @@ mod tests {
         assert_eq!(
             routed["model"], "strong-model",
             "floor_skip must rewrite the model to the floor tier's target"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn floor_skip_refreshes_idle_ttl_through_route() {
+        let addr = spawn_judge_sequence(vec![(
+            "HTTP/1.1 200 OK",
+            judge_body(&verdict(0.0, "LIM-2", "unsupported")),
+        )])
+        .await;
+        let filter = make_filter_with_ttl(&format!("http://{addr}/v1/chat/completions"), Duration::from_secs(3));
+        let client = make_client();
+        let request = make_request_with_session("/v1/chat/completions", "session-floor-ttl");
+
+        seed_strong_floor(filter.as_ref(), &request, &client).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let mut refresh_ctx = make_ctx(&request, Some(&client));
+        let mut refresh_body = Some(chat_body("refresh floor TTL"));
+        drop(
+            filter
+                .on_request_body(&mut refresh_ctx, &mut refresh_body, true)
+                .await
+                .expect("floor refresh succeeds"),
+        );
+        assert_eq!(refresh_ctx.get_metadata(METADATA_DECISION), Some("floor_skip"));
+
+        tokio::time::sleep(Duration::from_millis(2250)).await;
+        let mut after_original_ttl_ctx = make_ctx(&request, Some(&client));
+        let mut after_original_ttl_body = Some(chat_body("still on refreshed floor"));
+        drop(
+            filter
+                .on_request_body(&mut after_original_ttl_ctx, &mut after_original_ttl_body, true)
+                .await
+                .expect("refreshed floor remains live"),
+        );
+        assert_eq!(
+            after_original_ttl_ctx.get_metadata(METADATA_DECISION),
+            Some("floor_skip"),
+            "floor_skip must refresh the idle TTL beyond its original expiry"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn floor_skip_overrides_closed_when_floor_is_strong() {
+        // With on_failure: closed, a dead judge normally means 503. But when
+        // the session floor is already Strong, floor_skip fires before the
+        // judge is called, so the outage is invisible and the request succeeds.
+        // This documents an intentional design choice: the floor is a success
+        // path, not a failure path, so on_failure does not gate it.
+        let addr = spawn_judge_sequence(vec![
+            ("HTTP/1.1 200 OK", judge_body(&verdict(0.0, "LIM-2", "unsupported"))),
+            ("HTTP/1.1 500 Internal Server Error", "judge is dead".to_owned()),
+        ])
+        .await;
+        let filter = make_filter(&format!("http://{addr}/v1/chat/completions"), "closed");
+        let client = make_client();
+        let request = make_request_with_session("/v1/chat/completions", "session-closed-floor");
+
+        seed_strong_floor(filter.as_ref(), &request, &client).await;
+
+        let mut ctx = make_ctx(&request, Some(&client));
+        let mut body = Some(chat_body("follow-up while judge is dead"));
+        let action = filter
+            .on_request_body(&mut ctx, &mut body, true)
+            .await
+            .expect("floor_skip is a success path, not an error");
+
+        assert!(
+            matches!(action, FilterAction::Continue),
+            "a Strong floor must serve the request even with on_failure: closed"
+        );
+        assert_eq!(
+            ctx.get_metadata(METADATA_DECISION),
+            Some("floor_skip"),
+            "the floor must skip the judge, not reach the failure path"
+        );
+        assert_eq!(
+            ctx.get_metadata(METADATA_CLUSTER),
+            Some("strong-cluster"),
+            "floor_skip must route to Strong"
+        );
+        assert!(
+            ctx.get_metadata(METADATA_ERROR).is_none(),
+            "no error metadata when the judge is never called"
         );
     }
 

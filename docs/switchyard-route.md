@@ -63,6 +63,13 @@ minutes; cap is 10,000 entries (LRU). Lost on process restart or replica hop
 ([#3](https://github.com/praxis-proxy/experimental/issues/3)). Two chats
 without a header that start with the same user line share a key.
 
+> **No absolute lifetime:** active sessions only expire by idle TTL (30
+> minutes without a request). A session that keeps receiving turns never
+> expires and is never re-judged. Absolute lifetime and re-evaluation are
+> future work ([#3](https://github.com/praxis-proxy/experimental/issues/3))
+> — re-evaluation in particular needs design, because the judge classifies a
+> single turn, not the full conversation context.
+
 ## Configuration
 
 ```yaml
@@ -108,6 +115,12 @@ requests are not rewritten to a sticky tier.
 A Strong floor skips the judge, so a down judge on that session is
 `floor_skip`, not `reuse`. This table applies only when the judge (or decode)
 actually runs and fails.
+
+> **Observability note:** a Strong floor makes judge outages invisible on
+> that session — no error metadata, no `reuse`, just `floor_skip`. Sessions
+> still at Weak or with no entry call the judge normally, so `on_failure`
+> applies there. Health monitoring should check the judge endpoint directly,
+> not rely on routing errors alone.
 
 ## Demo
 
