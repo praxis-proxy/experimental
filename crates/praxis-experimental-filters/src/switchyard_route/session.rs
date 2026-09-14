@@ -123,6 +123,11 @@ impl SessionStore {
     }
 
     /// Floor on: `max(stored, incoming)`. Floor off: incoming as-is.
+    ///
+    /// Assumes expired entries were already removed by [`Self::last_success`]
+    /// (which calls [`Self::drop_if_idle`]) before this function runs.
+    /// All current call sites go through `route()` → `last_success()` →
+    /// judge → `remember()`, so a stale entry is never present here.
     fn tier_to_store(&self, map_key: &str, incoming: Tier, session_floor: SessionFloor) -> Tier {
         match session_floor {
             SessionFloor::Disabled => incoming,

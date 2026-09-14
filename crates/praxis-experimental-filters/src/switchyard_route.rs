@@ -2053,6 +2053,51 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn floor_skip_overrides_closed_when_floor_is_strong() {
+        // With on_failure: closed, a dead judge normally means 503. But when
+        // the session floor is already Strong, floor_skip fires before the
+        // judge is called, so the outage is invisible and the request succeeds.
+        // This documents an intentional design choice: the floor is a success
+        // path, not a failure path, so on_failure does not gate it.
+        let addr = spawn_judge_sequence(vec![
+            ("HTTP/1.1 200 OK", judge_body(&verdict(0.0, "LIM-2", "unsupported"))),
+            ("HTTP/1.1 500 Internal Server Error", "judge is dead".to_owned()),
+        ])
+        .await;
+        let filter = make_filter(&format!("http://{addr}/v1/chat/completions"), "closed");
+        let client = make_client();
+        let request = make_request_with_session("/v1/chat/completions", "session-closed-floor");
+
+        seed_strong_floor(filter.as_ref(), &request, &client).await;
+
+        let mut ctx = make_ctx(&request, Some(&client));
+        let mut body = Some(chat_body("follow-up while judge is dead"));
+        let action = filter
+            .on_request_body(&mut ctx, &mut body, true)
+            .await
+            .expect("floor_skip is a success path, not an error");
+
+        assert!(
+            matches!(action, FilterAction::Continue),
+            "a Strong floor must serve the request even with on_failure: closed"
+        );
+        assert_eq!(
+            ctx.get_metadata(METADATA_DECISION),
+            Some("floor_skip"),
+            "the floor must skip the judge, not reach the failure path"
+        );
+        assert_eq!(
+            ctx.get_metadata(METADATA_CLUSTER),
+            Some("strong-cluster"),
+            "floor_skip must route to Strong"
+        );
+        assert!(
+            ctx.get_metadata(METADATA_ERROR).is_none(),
+            "no error metadata when the judge is never called"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn floor_skip_rewrite_failure_follows_on_failure() {
         // A JSON array parses and keeps the session header, so floor-skip runs,
         // then rewrite_for_tier fails (not an object). Missing `model` still
