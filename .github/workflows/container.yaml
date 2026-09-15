@@ -49,7 +49,10 @@ jobs:
           persist-credentials: false
 
       - name: Build container image
-        run: docker build -t ghcr.io/praxis-proxy/experimental:ci -f Containerfile .
+        # Same FEATURES as publish.yaml: the image CI smoke-tests must be the
+        # image CI publishes, or an otel-only startup failure reaches GHCR
+        # with no coverage.
+        run: docker build --build-arg FEATURES=otel -t ghcr.io/praxis-proxy/experimental:ci -f Containerfile .
 
       # The server runs until stopped, so it starts detached. The config is
       # mounted at /etc/praxis/praxis.yaml, which is the working directory the

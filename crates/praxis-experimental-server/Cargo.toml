@@ -12,19 +12,32 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# praxis-ai-proxy's own feature is named "opentelemetry" (not "otel"); it
+# gates AI-specific spans such as intelligent_route's routing.select
+# (praxis-ai-filters/src/opentelemetry.rs). Without it, core request/filter
+# spans still export, but AI routing-decision spans are compiled out.
+otel = ["praxis-core/otel", "praxis-filter/otel", "praxis-ai-proxy/opentelemetry"]
+
 # cargo-machete's source scan can't see these usages:
 #  - praxis-experimental-filters is consumed by the discovery build script (its presence
 #    as a direct dep, carrying the praxis-filters marker, is the point).
 #  - praxis-ai-proxy is used as `praxis_ai::...` (lib name differs from package).
 #  - praxis-filter is referenced only in build-script-generated code.
 [package.metadata.cargo-machete]
-ignored = ["praxis-experimental-filters", "praxis-ai-proxy", "praxis-filter"]
+ignored = ["praxis-experimental-filters", "praxis-ai-proxy", "praxis-filter", "praxis-protocol"]
 
 [[bin]]
 name = "praxis-experimental-server"
 path = "src/main.rs"
 
 [dependencies]
+# CLI argument parsing, matching praxis-ai's own bin (-c/--config).
+clap = { version = "4.6.6", features = ["derive"] }
+
+# Startup diagnostics (the "no config file found" warning).
+tracing.workspace = true
+
 # Direct dependency on the filters crate is what makes it discoverable: the
 # build script scans this crate's direct runtime deps for the
 # `[package.metadata.praxis-filters]` marker.
@@ -33,19 +46,26 @@ praxis-experimental-filters = { path = "../praxis-experimental-filters" }
 # Praxis core (crates.io) — for constructing the SubRequestClient that
 # `build_full_registry` requires. Keep the 0.5.x line in lockstep with the
 # git-pinned praxis-ai-proxy crate below so `FilterRegistry` unifies.
-praxis-filter = { version = "0.5.3", package = "praxis-proxy-filter" }
-praxis-core = { version = "0.5.3", package = "praxis-proxy-core" }
+praxis-filter = { version = "0.5.4", package = "praxis-proxy-filter" }
+praxis-core = { version = "0.5.4", package = "praxis-proxy-core" }
+# praxis-ai-proxy's server constructs AdminEndpointOptions, which
+# praxis-proxy-protocol gates behind its `admin-api` feature without
+# enabling it itself. Declaring it here lets Cargo feature unification
+# turn it on for the whole graph. Not referenced from our own code.
+praxis-protocol = { version = "0.5.4", package = "praxis-proxy-protocol", features = ["admin-api"] }
 
-# The stock praxis-ai server. Pinned to an exact commit because praxis-ai crates
-# are `publish = false` (git dependency only) and move fast; bump deliberately.
+# The stock praxis-ai server. praxis-ai crates are `publish = false`, so this
+# stays a git dependency; pinned to a release tag rather than a floating rev.
 #
 # `http-callout-filter` is off by default upstream because its config surface is
 # still moving. This image exists to expose experimental work, so it is on here
 # — it is what backs the Lakera Guard example config.
-praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", rev = "45c075190c646c4e0397b29df9d944b7e49ed039", features = [
+praxis-ai-proxy = { git = "https://github.com/praxis-proxy/ai", tag = "v0.3.0", features = [
+  "token-rate-limit-filter",
   "http-callout-filter",
+  "praxis-main",
 ] }
 
 [build-dependencies]
 cargo_metadata = "0.23.1"
-praxis-ai-build-support = { git = "https://github.com/praxis-proxy/ai", rev = "45c075190c646c4e0397b29df9d944b7e49ed039" }
+praxis-ai-build-support = { git = "https://github.com/praxis-proxy/ai", tag = "v0.3.0" }

@@ -1,0 +1,142 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmd-epp
+  namespace: grid-system
+  labels:
+    app.kubernetes.io/name: llmd-epp
+    app.kubernetes.io/part-of: grid-llmd-pool-metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llmd-epp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: llmd-epp
+    spec:
+      serviceAccountName: llmd-epp
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: epp
+          image: "ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0"
+          imagePullPolicy: "IfNotPresent"
+          args:
+            - --pool-name=pool-a
+            - --pool-namespace=grid-system
+            - --grpc-port=9002
+            - --grpc-health-port=9003
+            - --metrics-port=9090
+            - --metrics-endpoint-auth=false
+            - --zap-log-level=info
+          ports:
+            - name: grpc
+              containerPort: 9002
+            - name: grpc-health
+              containerPort: 9003
+            - name: metrics
+              containerPort: 9090
+          readinessProbe:
+            grpc:
+              port: 9003
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            grpc:
+              port: 9003
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+        - name: metrics-tls-proxy
+          image: "docker.io/library/nginx:1.27.4-alpine"
+          imagePullPolicy: "IfNotPresent"
+          ports:
+            - name: metrics-tls
+              containerPort: 9443
+          volumeMounts:
+            - name: metrics-proxy-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+            - name: metrics-server-tls
+              mountPath: /etc/nginx/server-tls
+              readOnly: true
+            - name: metrics-client-ca
+              mountPath: /etc/nginx/client-ca
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            runAsNonRoot: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi
+      volumes:
+        - name: metrics-proxy-config
+          configMap:
+            name: metrics-tls-proxy-config
+        - name: metrics-server-tls
+          secret:
+            secretName: metrics-server-tls
+        - name: metrics-client-ca
+          secret:
+            secretName: metrics-ca
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llmd-epp
+  namespace: grid-system
+  labels:
+    app.kubernetes.io/name: llmd-epp
+    app.kubernetes.io/part-of: grid-llmd-pool-metrics
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: llmd-epp
+  ports:
+    - name: grpc
+      port: 9002
+      targetPort: 9002
+    - name: grpc-health
+      port: 9003
+      targetPort: 9003
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llmd-epp-metrics
+  namespace: grid-system
+  labels:
+    app.kubernetes.io/name: llmd-epp
+    app.kubernetes.io/part-of: grid-llmd-pool-metrics
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: llmd-epp
+  ports:
+    - name: metrics-tls
+      port: 9443
+      targetPort: 9443

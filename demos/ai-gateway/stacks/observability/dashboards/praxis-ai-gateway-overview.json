@@ -1,0 +1,152 @@
+{
+  "editable": true,
+  "graphTooltip": 1,
+  "description": "Combines the two telemetry planes deliberately. Prometheus counters are incremented on EVERY request and are unaffected by trace sampling, so they own all counts, rates and budget state. Span metrics are derived only from sampled traces, so they own latency distributions and the per-filter breakdown -- never volume. Each panel below states which plane it reads and why.",
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "panels": [],
+      "title": "Traffic & budget — Prometheus (100% of requests, sampling-independent)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Every HTTP response the gateway returned, by status class, counted by praxis core on 100% of requests and unaffected by trace sampling. Budget denials appear as `4xx` (they are 429s), so this is the independent confirmation that a rate-limit decision actually reached the client. `5xx` here points at the upstream model or the gateway itself, not at the limiter. Source: `rate(praxis_http_requests_total[1m])` by `status_class`.",
+      "fieldConfig": { "defaults": { "unit": "reqps", "noValue": "No traffic yet" }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 1 },
+      "id": 1,
+      "targets": [
+        { "expr": "sum by (status_class) (rate(praxis_http_requests_total[1m]))", "legendFormat": "{{status_class}}" }
+      ],
+      "title": "Request Rate by Status (429s show as 4xx)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Admission decisions per second, broken out by budget rule **and** decision, so you can see one tier throttling while another absorbs the same load. `admitted` was forwarded to the model; `denied` was rejected at admission with a 429 and never consumed GPU time. A 5-minute window is used deliberately: at 1 minute the denied series empties about a minute after a burst, so the result of a demo run would disappear before you looked at it. Source: `rate(praxis_ai_token_rate_limit_requests_total[5m])` by `rule` and `decision`.",
+      "fieldConfig": { "defaults": { "unit": "reqps", "noValue": "token_rate_limit not in the chain" }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 1 },
+      "id": 2,
+      "targets": [
+        {
+          "expr": "sum by (rule, decision) (rate(praxis_ai_token_rate_limit_requests_total[5m]))",
+          "legendFormat": "{{rule}} / {{decision}}"
+        }
+      ],
+      "title": "Admitted vs Denied, per Tier",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Fraction of each tier's requests rejected for budget over the last 5 minutes \u2014 a rate, so it decays back to zero once traffic stops. This is the panel that shows the tiers behaving differently: the free tier goes non-zero under sustained load while premium stays at 0%. Note the Token Budget dashboard's stat of the same name is a **lifetime** ratio and will keep reporting a value long after this one returns to zero; they disagree by design. Source: denied rate over total rate, per `rule`, with `clamp_min` so an idle tier reads 0% instead of dividing by zero.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "No decisions yet",
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.1 }, { "color": "red", "value": 0.4 }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 1 },
+      "id": 3,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "(sum by (rule) (rate(praxis_ai_token_rate_limit_requests_total{decision=\"denied\"}[5m])) or (sum by (rule) (rate(praxis_ai_token_rate_limit_requests_total[5m])) * 0)) / clamp_min(sum by (rule) (rate(praxis_ai_token_rate_limit_requests_total[5m])), 0.0001)",
+          "legendFormat": "{{rule}}"
+        }
+      ],
+      "title": "Denial Rate per Tier",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Real tokens per second per tier, reconciled against what the model reported \u2014 not the reserved estimate. Compare against the tier's configured `capacity`: 5,000 tokens/min is ~83 tokens/sec sustainable on the free tier. It lags admission by roughly one request duration, because a reservation only settles once the response body has been parsed. Source: `rate(praxis_ai_token_rate_limit_tokens_total{kind=\"actual\"}[1m])` by `rule`.",
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "No traffic yet" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 4,
+      "targets": [
+        { "expr": "sum by (rule) (rate(praxis_ai_token_rate_limit_tokens_total{kind=\"actual\"}[1m]))", "legendFormat": "{{rule}} actual" }
+      ],
+      "title": "Token Consumption Rate (tokens/sec)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "How good the reservation estimate is. `estimated` is `reserved_tokens` charged up front at admission; `actual` is what the model reported; the difference settles as `refunded` (over-reserved, given back) or `overage` (under-reserved, charged extra). `estimated \u2248 actual + refunded` by construction. A large refunded share means `reserved_tokens` sits well above real usage, which throttles bursts harder than the nominal budget implies \u2014 concurrency is bounded by the estimate even though throughput follows real usage. **If `actual` exactly equals `estimated` and refunded stays flat at zero, reconciliation is not running** \u2014 almost always because `token_rate_limit` was declared *after* `token_count` (response hooks run in reverse declared order). Source: `rate(praxis_ai_token_rate_limit_tokens_total[1m])` by `kind`.",
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "No traffic yet" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 5,
+      "targets": [
+        { "expr": "sum by (kind) (rate(praxis_ai_token_rate_limit_tokens_total[1m]))", "legendFormat": "{{kind}}" }
+      ],
+      "title": "Estimation Accuracy: estimated vs actual vs refunded vs overage",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 16 },
+      "id": 101,
+      "panels": [],
+      "title": "Latency — span metrics (SAMPLED subset: distributions are valid, volume is NOT)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Per-filter P99 latency derived from trace spans. Praxis emits one span per filter per phase, so `span_name` (`filter:<name>:<phase>`) is the breakdown key \u2014 this answers \"which filter costs what\", which a trace waterfall can only show one request at a time. **SAMPLED plane.** Random sampling is unbiased for percentiles, so these values are trustworthy even at a low sampling rate; the *volume* behind them is not \u2014 never read a count or rate off a span-derived panel. Empty for a scrape interval or two after first traffic is expected. Source: `histogram_quantile(0.99, traces_spanmetrics_latency_bucket)` from Tempo's metrics-generator.",
+      "fieldConfig": { "defaults": { "unit": "s", "noValue": "No span metrics - is Tempo's metrics-generator enabled?" }, "overrides": [] },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 17 },
+      "id": 6,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["max"] } },
+      "targets": [
+        {
+          "expr": "topk(10, histogram_quantile(0.99, sum by (span_name, le) (rate(traces_spanmetrics_latency_bucket{service=\"praxis\"}[5m]))))",
+          "legendFormat": "{{span_name}}"
+        }
+      ],
+      "title": "P99 Latency by Filter Span (sampled)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Total time attributable to each filter per second: how much wall clock the gateway actually spends there, which reorders the ranking against raw P99 \u2014 a slow filter that runs rarely can matter less than a fast one on every request. Deliberately mixes the two planes: the latency quantile comes from **sampled** span metrics (valid under sampling), while the request rate comes from `praxis_http_requests_total`, a Prometheus counter covering **100%** of requests. Multiplying two sampled series instead would under-report by exactly the sampling factor while looking entirely plausible.",
+      "fieldConfig": { "defaults": { "unit": "s", "noValue": "No span metrics yet" }, "overrides": [] },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 17 },
+      "id": 7,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean"] } },
+      "targets": [
+        {
+          "expr": "topk(10, histogram_quantile(0.99, sum by (span_name, le) (rate(traces_spanmetrics_latency_bucket{service=\"praxis\"}[5m]))) * scalar(sum(rate(praxis_http_requests_total[5m]))))",
+          "legendFormat": "{{span_name}}"
+        }
+      ],
+      "title": "Weighted Filter Cost — sampled P99 x TRUE request rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Divides the span-derived request rate by the true Prometheus request rate, so it should sit at roughly the configured `sampling_rate` \u2014 ~1.0 in this demo, which sets 1.0 explicitly so the span panels have every request to work with. A reading materially **below** the configured rate means spans are being *lost* rather than sampled. The second series, span export failures to Tempo, is plotted alongside so you can tell the two apart at a glance: a drop with failures rising is a broken pipeline; a drop with failures flat is a sampler change. Both series are rates over 5 minutes and need sustained traffic to be meaningful.",
+      "fieldConfig": { "defaults": { "unit": "percentunit", "noValue": "Needs both planes reporting" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 26 },
+      "id": 8,
+      "targets": [
+        {
+          "expr": "sum(rate(traces_spanmetrics_calls_total{service=\"praxis\", span_kind=\"SPAN_KIND_SERVER\"}[5m])) / clamp_min(sum(rate(praxis_http_requests_total[5m])), 0.0001)",
+          "legendFormat": "observed sampling ratio"
+        },
+        { "expr": "sum(rate(otelcol_exporter_send_failed_spans{exporter=\"otlp/tempo\"}[5m]))", "legendFormat": "spans FAILED to export" }
+      ],
+      "title": "Sampling Ratio Cross-Check (span plane / Prometheus plane)",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["praxis", "ai", "tokens", "spanmetrics"],
+  "time": { "from": "now-30m", "to": "now" },
+  "title": "Praxis AI Gateway Overview",
+  "uid": "praxis-ai-gateway-overview"
+}

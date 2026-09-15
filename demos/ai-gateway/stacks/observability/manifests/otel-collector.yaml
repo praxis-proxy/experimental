@@ -1,0 +1,120 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: otel
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      # First in the pipeline. The container is limited to 512Mi; without this,
+      # exporter backpressure grows the queue until the kernel kills the collector
+      # and every buffered span is lost. With it, the collector refuses new spans
+      # near the limit and counts them in otelcol_processor_refused_spans, which
+      # the Span Export Failures panel shows.
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 400
+        spike_limit_mib: 100
+      batch:
+        timeout: 5s
+        # send_batch_size is only a FLUSH TRIGGER, not a cap -- a flush already
+        # in progress keeps absorbing spans, which is why the drops logged
+        # dropped_items: 8280 against a configured 8192. send_batch_max_size is
+        # the actual hard ceiling and must be >= send_batch_size.
+        #
+        # Both cap SPAN COUNT, not bytes, so neither can *guarantee* a message
+        # stays under a byte limit -- spans with large attributes could still
+        # overflow. The receiver limit (see tempo in forge.yaml) is the real
+        # guarantee; these are defence in depth. Upstream recommends both.
+        send_batch_size: 1024
+        send_batch_max_size: 2048
+
+    exporters:
+      debug:
+        verbosity: basic
+      otlp/tempo:
+        endpoint: tempo.monitoring.svc:4317
+        tls:
+          insecure: true
+    service:
+      # Without this the collector's self-metrics stay on localhost and nobody
+      # sees otelcol_exporter_send_failed_spans -- which is exactly how 98% of
+      # spans were lost with no visible symptom. NOTE: this flat form is
+      # correct for collector < 0.123.0; newer versions use a `readers` array.
+      telemetry:
+        metrics:
+          level: normal
+          address: 0.0.0.0:8888
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [debug, otlp/tempo]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: otel
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      containers:
+        - name: collector
+          image: otel/opentelemetry-collector-contrib:0.108.0
+          args: ["--config=/etc/otelcol/config.yaml"]
+          ports:
+            - containerPort: 8888
+              name: metrics
+            - containerPort: 4317
+              name: otlp-grpc
+            - containerPort: 4318
+              name: otlp-http
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: otel
+spec:
+  selector:
+    app: otel-collector
+  ports:
+    - port: 8888
+      targetPort: 8888
+      name: metrics
+    - port: 4317
+      targetPort: 4317
+      name: otlp-grpc
+    - port: 4318
+      targetPort: 4318
+      name: otlp-http

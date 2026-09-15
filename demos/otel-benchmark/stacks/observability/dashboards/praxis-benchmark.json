@@ -1,0 +1,59 @@
+{
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "targets": [{ "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{pod=~\"praxis-proxy.*\"}[1m]))", "legendFormat": "{{pod}}" }],
+      "title": "Praxis CPU Usage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "targets": [{ "expr": "container_memory_working_set_bytes{pod=~\"praxis-proxy.*\", container=\"praxis-proxy\"}", "legendFormat": "{{pod}}" }],
+      "title": "Praxis Memory Usage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "targets": [{ "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{pod=~\"otel-collector.*\"}[1m]))", "legendFormat": "{{pod}}" }],
+      "title": "OTel Collector CPU",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "targets": [{ "expr": "sum(rate(praxis_http_requests_total[1m]))", "legendFormat": "RPS" }],
+      "title": "Request Rate (1m)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "id": 5,
+      "targets": [
+        { "expr": "max(praxis_http_request_duration_seconds{quantile=\"0.5\"})", "legendFormat": "P50" },
+        { "expr": "max(praxis_http_request_duration_seconds{quantile=\"0.99\"})", "legendFormat": "P99" }
+      ],
+      "title": "Latency During Benchmark",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["praxis", "benchmark"],
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Praxis Benchmark Results",
+  "uid": "praxis-benchmark"
+}

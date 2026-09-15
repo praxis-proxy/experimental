@@ -1,0 +1,15 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: praxis-proxy
+  namespace: default
+  labels:
+    app: praxis-proxy
+spec:
+  selector:
+    matchLabels:
+      app: praxis-proxy
+  endpoints:
+    - port: admin
+      interval: 15s
+      path: /metrics

@@ -11,7 +11,7 @@
 # Usage:
 #   docker run --rm -p 8080:8080 \
 #     -v "$PWD/examples/configs/minimal.yaml:/etc/praxis/praxis.yaml:ro" \
-#     ghcr.io/praxis-proxy/experimental:latest
+#     ghcr.io/praxis-proxy/experimental:main
 #
 #   curl http://localhost:8080/
 #   curl http://127.0.0.1:9901/healthy   # from inside the container

@@ -1,16 +1,68 @@
 # syntax=docker/dockerfile:1
 
+# Red Hat UBI9 image for the experimental Praxis AI gateway.
+#
+# Base images are UBI rather than Alpine because this image is the upstream of
+# the Open Data Hub midstream build: Konflux's base-image trust policy and the
+# Red Hat container catalogue both expect UBI, and building the same file here
+# and there means GHCR and quay.io ship identical bits.
+#
+# The Rust toolchain comes from the checksum-pinned upstream release tarball
+# rather than from RHEL's AppStream `rust-toolset`, which is 1.92 and so cannot
+# satisfy this workspace's `rust-version = "1.96"`. This is the same mechanism
+# opendatahub-io/openshell uses; under a hermetic Konflux build the identical
+# tarball is prefetched to /cachi2/output/deps/generic, pinned by URL and
+# checksum in that pipeline's generic-fetcher lockfile, and the RUN below picks
+# it up from there instead of reaching the network. Nothing in this repo needs
+# to change to enable that.
+
 # ------------------------------------------------------------------------------
 # Stage 1: Build
 # ------------------------------------------------------------------------------
 
-FROM rust:1.97-alpine AS builder
+FROM registry.access.redhat.com/ubi9/ubi:9.8@sha256:25a147defd01e19674714f55d17538c8dbe55d8c305fa157ecc3f9c8977b05b6 AS builder
 
-ENV OPENSSL_STATIC=1
+# No openssl-devel: the binary links rustls, so nothing in the graph builds
+# against system OpenSSL. Verified with ldd on the produced binary.
+RUN dnf install -y --nodocs --setopt=install_weak_deps=0 \
+        gcc cmake make xz \
+    && dnf clean all
 
-RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static pkgconf cmake make g++ git
+# Hermeto's cargo prefetch vendors against the sparse index; matching the
+# protocol here keeps a later hermetic build byte-identical to this one.
+ENV CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse \
+    PATH=/usr/local/bin:$PATH
+
+# Keep in lockstep with rust-toolchain.toml. Both checksums are the official
+# ones published alongside the tarballs at static.rust-lang.org.
+ARG RUST_VERSION=1.96.1
+ARG RUST_SHA256_X86_64=d29ccb1559a177c4e72291f6e5f629de7fe8885e7521ca47802627544b121e95
+ARG RUST_SHA256_AARCH64=3abcb9489d001d95f30e8cfe68118be85afb0adbf0a9b21438909719689c08fb
+
+RUN set -eu; \
+    case "$(uname -m)" in \
+      x86_64)  triple=x86_64-unknown-linux-gnu;  sha="${RUST_SHA256_X86_64}" ;; \
+      aarch64) triple=aarch64-unknown-linux-gnu; sha="${RUST_SHA256_AARCH64}" ;; \
+      *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    tarball="rust-${RUST_VERSION}-${triple}.tar.xz"; \
+    prefetched="/cachi2/output/deps/generic/${tarball}"; \
+    if [ -f "${prefetched}" ]; then \
+      cp "${prefetched}" /tmp/rust.tar.xz; \
+    else \
+      curl -fsSL -o /tmp/rust.tar.xz "https://static.rust-lang.org/dist/${tarball}"; \
+    fi; \
+    printf '%s  /tmp/rust.tar.xz\n' "${sha}" | sha256sum -c -; \
+    mkdir -p /tmp/rust; \
+    tar xJf /tmp/rust.tar.xz -C /tmp/rust --strip-components=1; \
+    /tmp/rust/install.sh --prefix=/usr/local \
+        --components="rustc,cargo,rust-std-${triple}"; \
+    rm -rf /tmp/rust /tmp/rust.tar.xz; \
+    rustc --version; cargo --version
 
 WORKDIR /src
+
+ARG FEATURES=""
 
 # ------------------------------------------------------------------------------
 # Cache Build
@@ -43,9 +95,11 @@ RUN mkdir -p crates/experimental-probe/src \
     && mkdir -p crates/praxis-experimental-server/src \
     && printf '//! stub\nfn main() {}\n' > crates/praxis-experimental-server/src/main.rs
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+# Konflux mounts an ephemeral container store and passes --no-cache, so these
+# mounts help local and GitHub Actions builds only; they are inert there.
+RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo build --release -p praxis-experimental-server
+    cargo build --release -p praxis-experimental-server ${FEATURES:+--features "$FEATURES"}
 
 # ------------------------------------------------------------------------------
 # Cache Tricks
@@ -66,36 +120,73 @@ RUN find crates -name '*.rs' -exec touch {} +
 # Build
 # ------------------------------------------------------------------------------
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo build --release -p praxis-experimental-server \
-    && cp target/release/praxis-experimental-server /usr/local/bin/praxis-experimental-server
+    cargo build --release -p praxis-experimental-server ${FEATURES:+--features "$FEATURES"} \
+    && install -m 0555 target/release/praxis-experimental-server \
+       /usr/local/bin/praxis-experimental-server
 
 # ------------------------------------------------------------------------------
 # Stage 2: Runtime
 # ------------------------------------------------------------------------------
 
-FROM alpine:3.24
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8@sha256:7fbeae18dc9476399f565e68255f602a3374ea8614ba3d14843565131a13ff93
 
+# Re-declare in this stage: ARG scope does not cross FROM boundaries.
+ARG FEATURES=""
+
+# Overridable so the midstream build can stamp product values (rhoai/... name,
+# Red Hat vendor, release) without needing a second Containerfile.
+ARG IMAGE_NAME="praxis-experimental"
+ARG VENDOR="Praxis Contributors"
+ARG VERSION="0.0.0"
+ARG RELEASE="1"
+
+# name/vendor/version/release/summary/description/maintainer are the labels
+# Red Hat container certification requires; the rest are catalogue UX.
+#
+# io.praxis.build.features records which non-default cargo features the binary
+# was compiled with, so a pulled image can be interrogated for its capabilities:
+#   docker inspect --format \
+#     '{{index .Config.Labels "io.praxis.build.features"}}' <image>
 LABEL org.opencontainers.image.source="https://github.com/praxis-proxy/experimental" \
     org.opencontainers.image.description="Praxis experimental AI gateway (praxis-ai + experimental filters)" \
-    org.opencontainers.image.licenses="Apache-2.0"
+    org.opencontainers.image.licenses="Apache-2.0" \
+    io.praxis.build.features="${FEATURES}" \
+    name="${IMAGE_NAME}" \
+    vendor="${VENDOR}" \
+    version="${VERSION}" \
+    release="${RELEASE}" \
+    summary="Praxis experimental AI gateway" \
+    description="OpenAI- and Anthropic-compatible AI gateway built on Praxis, with experimental filters" \
+    maintainer="https://github.com/praxis-proxy/experimental" \
+    io.k8s.display-name="Praxis experimental AI gateway" \
+    io.k8s.description="OpenAI- and Anthropic-compatible AI gateway built on Praxis, with experimental filters" \
+    io.openshift.tags="ai,gateway,llm,proxy" \
+    io.openshift.expose-services="8080:http,9901:http"
 
-RUN apk add --no-cache ca-certificates \
-    && addgroup -S praxis \
-    && adduser -S -G praxis -h /nonexistent -s /sbin/nologin praxis \
-    && mkdir -p /etc/praxis
+# No package installs: the pinned ubi-minimal already ships curl (which backs the
+# HEALTHCHECK below) and ca-certificates. Installing them explicitly is a no-op
+# that only costs three metadata fetches, and the digest pin means the base
+# cannot drop them without a deliberate bump -- re-check both if that bump happens.
+RUN mkdir -p /etc/praxis /licenses
+
+COPY LICENSE /licenses/LICENSE
 
 COPY --from=builder --chown=root:root --chmod=0555 \
     /usr/local/bin/praxis-experimental-server /usr/local/bin/praxis-experimental-server
 
-USER praxis:praxis
+# Numeric UID with no /etc/passwd entry: OpenShift's restricted SCC assigns a
+# UID from the namespace's range regardless of what USER says, and keeps GID 0.
+USER 1001
 
+# The server resolves its configuration from ./praxis.yaml when --config is not
+# given, so the working directory is the mount point for a config file.
 WORKDIR /etc/praxis
 
 EXPOSE 8080 9901
 
 HEALTHCHECK --interval=5s --timeout=3s --start-period=2s \
-    CMD wget -qO- http://127.0.0.1:9901/healthy || exit 1
+    CMD curl --fail --silent --show-error http://127.0.0.1:9901/healthy || exit 1
 
 ENTRYPOINT ["praxis-experimental-server"]

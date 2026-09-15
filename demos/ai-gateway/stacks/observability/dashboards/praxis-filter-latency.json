@@ -1,0 +1,241 @@
+{
+  "editable": true,
+  "graphTooltip": 1,
+  "description": "Per-filter latency derived from trace spans. Tempo's metrics-generator turns every span into RED metrics; praxis emits one span per filter per phase, so span_name is the breakdown key. This answers 'which filter costs what', which a trace waterfall can only show one request at a time.",
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Tail latency per filter span across the window, worst first in the legend table. Praxis emits one span per filter per phase, so `span_name` (`filter:<name>:<phase>`) is the breakdown key \u2014 this is the per-filter cost question answered as a query rather than by eyeballing a waterfall. Phases matter: `:request` runs before the upstream call, `:response` on headers, `:response_body` only when a body is actually inspected. **SAMPLED plane** \u2014 percentiles are unbiased under random sampling, volumes are not. Source: `histogram_quantile(0.99, traces_spanmetrics_latency_bucket)`, top 12 spans.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No span metrics yet - see the dashboard description",
+          "custom": {
+            "fillOpacity": 0,
+            "lineWidth": 2
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "max"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "expr": "topk(12, histogram_quantile(0.99, sum by (span_name, le) (rate(traces_spanmetrics_latency_bucket{service=\"praxis\"}[5m]))))",
+          "legendFormat": "{{span_name}}"
+        }
+      ],
+      "title": "P99 Latency by Filter Span",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Median latency per filter span, to be read against the P99 panel directly above. A filter with a low median and a high P99 is **bursty** \u2014 occasional slow calls, typically I/O or a lock \u2014 while one where the two are close is uniformly expensive and is a better optimisation target. **SAMPLED plane**: distributions are valid, volume is not. Source: `histogram_quantile(0.50, traces_spanmetrics_latency_bucket)`, top 12 spans.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No span metrics yet",
+          "custom": {
+            "fillOpacity": 0,
+            "lineWidth": 2
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "max"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "expr": "topk(12, histogram_quantile(0.50, sum by (span_name, le) (rate(traces_spanmetrics_latency_bucket{service=\"praxis\"}[5m]))))",
+          "legendFormat": "{{span_name}}"
+        }
+      ],
+      "title": "P50 Latency by Filter Span",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Total time per second attributable to each filter, which reorders the ranking against raw P99: a fast filter that runs on every request can cost more wall clock than a slow one that rarely fires. Deliberately mixes planes \u2014 the quantile is from **sampled** span metrics (valid under sampling), the request rate from `praxis_http_requests_total`, a Prometheus counter covering **100%** of requests. Using the span-derived call rate here instead would under-report by exactly the sampling factor while looking entirely plausible.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No span metrics yet"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "expr": "topk(10, histogram_quantile(0.99, sum by (span_name, le) (rate(traces_spanmetrics_latency_bucket{service=\"praxis\"}[5m]))) * scalar(sum(rate(praxis_http_requests_total[5m]))))",
+          "legendFormat": "{{span_name}}"
+        }
+      ],
+      "title": "Weighted Filter Cost (sampled P99 x true request rate)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "How often each span is produced per second \u2014 the shape of the filter chain rather than its cost. Request-phase spans run once per request, so they should all sit at roughly the same rate; a `:response_body` span sitting materially lower means that filter only inspects some responses. **SAMPLED plane, so these are not true request counts** \u2014 they are low by the sampling factor. Read absolute volume from `praxis_http_requests_total` instead; use this panel for relative shape only.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "noValue": "No span metrics yet"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "expr": "topk(10, sum by (span_name) (rate(traces_spanmetrics_calls_total{service=\"praxis\"}[5m])))",
+          "legendFormat": "{{span_name}}"
+        }
+      ],
+      "title": "Span Rate by Filter",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "P50 and P99 of the trace root span \u2014 the whole request through the gateway, including the upstream model call \u2014 for scale against the per-filter panels above. Against a real model this is dominated by inference: if the root is hundreds of milliseconds while every `filter:*` span is sub-millisecond, the gateway is not the bottleneck and the filter chain's total overhead is the sum of those small spans. **SAMPLED plane.** Source: `traces_spanmetrics_latency_bucket` filtered to `span_kind=\"SPAN_KIND_SERVER\"`, which selects the root.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No span metrics yet"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 30
+      },
+      "id": 5,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(traces_spanmetrics_latency_bucket{service=\"praxis\", span_kind=\"SPAN_KIND_SERVER\"}[5m])))",
+          "legendFormat": "P99 request"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(traces_spanmetrics_latency_bucket{service=\"praxis\", span_kind=\"SPAN_KIND_SERVER\"}[5m])))",
+          "legendFormat": "P50 request"
+        }
+      ],
+      "title": "End-to-End Request Latency (from spans)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Spans that recorded an error status, per second, broken out by which filter produced them \u2014 this localises a failure to a specific filter and phase instead of just telling you the request failed. Empty (\"No errors\") is the healthy state and is what this demo normally shows. Note a 429 from the token budget is a deliberate admission decision, **not** a span error, so rate-limited requests do not appear here \u2014 look at Admitted vs Denied for those. **SAMPLED plane**: an error on an unsampled request leaves no span behind, so this under-reports whenever sampling is below 1.0.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "noValue": "No errors"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 30
+      },
+      "id": 6,
+      "targets": [
+        {
+          "expr": "sum by (span_name) (rate(traces_spanmetrics_calls_total{service=\"praxis\", status_code=\"STATUS_CODE_ERROR\"}[5m]))",
+          "legendFormat": "{{span_name}}"
+        }
+      ],
+      "title": "Span Errors",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": [
+    "praxis",
+    "traces",
+    "spanmetrics"
+  ],
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "title": "Praxis Filter Latency (from spans)",
+  "uid": "praxis-filter-latency"
+}

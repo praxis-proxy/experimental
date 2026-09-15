@@ -1,0 +1,13 @@
+# Keep the build context small: without this, `docker build .` uploads the
+# whole target/ directory (gigabytes once anything has been built locally).
+# The Containerfile copies only Cargo.toml, Cargo.lock, crates/ and LICENSE.
+
+target/
+.git/
+.github/
+demos/
+docs/
+examples/
+hack/
+# LICENSE has no extension, so it survives this and is copied to /licenses.
+*.md

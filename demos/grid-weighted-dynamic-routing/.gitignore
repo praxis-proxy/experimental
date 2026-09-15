@@ -1,0 +1,8 @@
+evidence/
+.forge.resolved*
+.grid-*.resolved.yaml
+*.kubeconfig
+*.key
+*.crt
+*.pem
+*.tar

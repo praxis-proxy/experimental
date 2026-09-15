@@ -1,0 +1,16 @@
+apiVersion: inference.networking.k8s.io/v1
+kind: InferencePool
+metadata:
+  name: "pool-c"
+  namespace: grid-system
+spec:
+  targetPorts:
+    - number: 8000
+  selector:
+    matchLabels:
+      app: vllm-vcr
+      pool: "pool-c"
+  endpointPickerRef:
+    name: llmd-epp
+    port:
+      number: 9002

@@ -1,0 +1,30 @@
+{
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "datasource": { "type": "loki", "uid": "loki" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "targets": [{ "expr": "sum(rate({container=\"praxis-proxy\"} [5m]))", "legendFormat": "log rate" }],
+      "title": "Log Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "loki", "uid": "loki" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 6 },
+      "id": 2,
+      "options": { "cellHeight": "sm", "showHeader": true },
+      "targets": [{ "expr": "{container=\"praxis-proxy\"}", "refId": "A" }],
+      "title": "All Praxis Logs",
+      "type": "table"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["praxis", "logs"],
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Praxis Structured Logs",
+  "uid": "praxis-logs"
+}

@@ -1,0 +1,104 @@
+# AI OTel full.
+# Extended AI filter chain: request_id, access_log, model_to_header,
+# token_usage_headers, token_count, time_to_first_token, intelligent_route,
+# load_balancer. Spans exported to collector.
+#
+# Filter order notes:
+#   - token_usage_headers is declared BEFORE token_count: response hooks
+#     run in reverse declared order, so token_count's on_response_body
+#     (which populates filter_metadata token.input/output/total) runs
+#     before token_usage_headers reads it and injects the
+#     Praxis-Token-* response headers.
+#   - intelligent_route is the sole cluster-selecting filter here.
+#     Praxis's pipeline validator rejects a chain with more than one
+#     cluster-selecting filter ahead of load_balancer (router and
+#     intelligent_route both implement `selects_cluster() -> true`), so
+#     the plain path-prefix `router` filter used by the non-AI baseline
+#     configs is dropped in favor of intelligent_route, which resolves
+#     the model name (promoted to X-Model by model_to_header) against
+#     its static candidates and records the routing.select span. The
+#     inference candidate is fresh (high score) and always wins over the
+#     stale echo fallback. The `ai` benchmark scenario only sends
+#     POST /v1/chat/completions traffic, so this is sufficient; the echo
+#     cluster stays defined in load_balancer to demonstrate the
+#     fallback-candidate shape but is not reachable by this config's
+#     benchmark traffic.
+
+admin:
+  address: "0.0.0.0:9901"
+
+insecure_options:
+  allow_public_admin: true
+
+telemetry:
+  otlp_endpoint: "http://otel-collector.otel.svc:4317"
+
+  # 500 RPS x 23 spans/request is ~11,500 spans/sec unsampled, which no real
+  # deployment exports in full. The default is ParentBased(AlwaysOn); this
+  # samples 10% of TRACES, and because the sampler is parent-based every
+  # sampled trace arrives complete -- you get fewer traces, not partial ones.
+  #
+  # Note this means the benchmark measures span creation on every request
+  # plus export of a tenth of them, which is the realistic operating point.
+  # Remove this line to measure the unsampled worst case.
+  sampling_rate: 0.1
+
+listeners:
+  - name: default
+    address: "0.0.0.0:8080"
+    filter_chains: [main]
+
+filter_chains:
+  - name: main
+    filters:
+      - filter: request_id
+      - filter: access_log
+
+      # Extract the model field from the JSON request body onto the
+      # default X-Model header for downstream routing.
+      - filter: model_to_header
+
+      # token_usage_headers must precede token_count in the filter list
+      # (response hooks run in reverse order). Note: for the openai
+      # provider (and every provider currently supported), token_count
+      # extracts usage from the response body inside on_response_body,
+      # which runs after response headers are already sent downstream,
+      # so the Praxis-Token-* headers are never actually injected on the
+      # wire today (see ai/examples/configs/token-counting.yaml). The
+      # counts still land in filter_metadata for other response-phase
+      # filters (and traces/metrics) to read.
+      - filter: token_usage_headers
+
+      - filter: token_count
+        provider: openai
+
+      - filter: time_to_first_token
+
+      # Score-based routing over static candidates keyed on the X-Model
+      # header. inference-sim serves "test-model" and is fresh (high
+      # score); echo-backend is a stale fallback (low score) that never
+      # wins while inference-sim is admitted.
+      - filter: intelligent_route
+        local_site: site-a
+        model_header: X-Model
+        candidates:
+          - kind: inference_model
+            name: test-model
+            site: site-a
+            cluster: inference
+            fresh: true
+
+          - kind: inference_model
+            name: test-model
+            site: site-a
+            cluster: echo
+            fresh: false
+
+      - filter: load_balancer
+        clusters:
+          - name: echo
+            endpoints:
+              - "echo-backend.default.svc:8080"
+          - name: inference
+            endpoints:
+              - "inference-sim.default.svc:8000"

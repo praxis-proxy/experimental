@@ -1,0 +1,31 @@
+# Core baseline (no OTel).
+# Same filter chain as otel-full for apples-to-apples comparison.
+
+admin:
+  address: "0.0.0.0:9901"
+
+insecure_options:
+  allow_public_admin: true
+
+listeners:
+  - name: default
+    address: "0.0.0.0:8080"
+    filter_chains: [main]
+
+filter_chains:
+  - name: main
+    filters:
+      - filter: request_id
+
+      - filter: access_log
+
+      - filter: router
+        routes:
+          - path_prefix: "/"
+            cluster: echo
+
+      - filter: load_balancer
+        clusters:
+          - name: echo
+            endpoints:
+              - "echo-backend.default.svc:8080"

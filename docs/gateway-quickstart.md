@@ -37,7 +37,7 @@ Check it is alive, the admin listener binds loopback, so query it from inside
 the container:
 
 ```console
-docker exec <container> wget -qO- http://127.0.0.1:9901/healthy
+docker exec <container> curl --fail --silent http://127.0.0.1:9901/healthy
 {"status":"ok"}
 ```
 

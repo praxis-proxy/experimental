@@ -1,0 +1,115 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "Trace Search",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 1 },
+      "id": 1,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true,
+        "sortBy": [{ "desc": true, "displayName": "Start time" }]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "queryType": "nativeSearch",
+          "serviceName": "praxis",
+          "limit": 20
+        }
+      ],
+      "description": "The most recent traces Tempo has stored, newest first. Click a trace ID to open the waterfall and see the per-filter span breakdown for that single request. This is the sampled plane: at `sampling_rate: 1.0` (what this demo sets) every request appears; at a lower rate you see only the sampled fraction, so absence here is not evidence a request did not happen. Empty right after deploy is expected \u2014 Tempo needs a scrape interval or two before the first traces are queryable.",
+      "title": "Recent Traces",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 13 },
+      "id": 2,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "queryType": "nativeSearch",
+          "serviceName": "praxis",
+          "search": "status=error",
+          "limit": 20
+        }
+      ],
+      "description": "Traces whose root span carries an error status. Use it to jump straight from \"something is failing\" to the exact request and the filter that produced the error, without scrolling the full trace list. Empty is the healthy state and is what you should normally see in this demo \u2014 a 429 from the budget is a deliberate rejection, not a span error, so rate-limited requests do **not** show up here. Sampled plane: an error on an unsampled request leaves no trace behind.",
+      "title": "Error Traces",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 13 },
+      "id": 3,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "queryType": "nativeSearch",
+          "serviceName": "praxis",
+          "minDuration": "100ms",
+          "limit": 20
+        }
+      ],
+      "description": "Traces whose total duration exceeded 100ms, the tail you would actually investigate. Against a real model nearly every request qualifies \u2014 inference dominates and a small local model still takes ~300ms \u2014 so treat this as a sorted latency list for this demo rather than an alert. The useful comparison is between the root duration here and the per-filter spans inside the trace: if the root is slow but every `filter:*` span is sub-millisecond, the time is upstream in the model, not in the gateway.",
+      "title": "Slow Traces (>100ms)",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Whether the trace pipeline is losing data between the OTel collector and Tempo, which is otherwise completely silent \u2014 spans vanish while every request still returns 200.\n\n`sent OK` \u2014 spans successfully delivered to Tempo. `send failed` \u2014 Tempo rejected the batch; the most common cause is a batch larger than Tempo's OTLP gRPC receive limit, which is rejected as `ResourceExhausted` and dropped **whole**. `enqueue failed` \u2014 the exporter queue was full. `refused (memory_limiter)` \u2014 the collector shed load near its memory cap instead of being OOM-killed, which loses less than a kill would.\n\nAnything but `sent OK` sustained above zero means traces are being lost and every span-derived panel is under-reporting. All exporter series are filtered to `exporter=\"otlp/tempo\"`, because the pipeline also has a `debug` exporter that would otherwise double the counts.",
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "0 - no export failures" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 23 },
+      "id": 101,
+      "targets": [
+        { "expr": "sum(rate(otelcol_exporter_send_failed_spans{exporter=\"otlp/tempo\"}[5m]))", "legendFormat": "send failed" },
+        { "expr": "sum(rate(otelcol_exporter_enqueue_failed_spans{exporter=\"otlp/tempo\"}[5m]))", "legendFormat": "enqueue failed" },
+        { "expr": "sum(rate(otelcol_processor_refused_spans{processor=\"memory_limiter\"}[5m]))", "legendFormat": "refused (memory_limiter)" },
+        { "expr": "sum(rate(otelcol_exporter_sent_spans{exporter=\"otlp/tempo\"}[5m]))", "legendFormat": "sent OK" }
+      ],
+      "title": "Span Export Failures (collector -> Tempo)",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["praxis", "traces"],
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Praxis OTel Traces",
+  "uid": "praxis-traces"
+}

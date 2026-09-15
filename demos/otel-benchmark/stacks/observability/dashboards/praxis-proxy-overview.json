@@ -1,0 +1,50 @@
+{
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "targets": [{ "expr": "sum(rate(praxis_http_requests_total[5m]))", "legendFormat": "RPS" }],
+      "title": "Request Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "targets": [
+        { "expr": "max(praxis_http_request_duration_seconds{quantile=\"0.5\"})", "legendFormat": "P50" },
+        { "expr": "max(praxis_http_request_duration_seconds{quantile=\"0.99\"})", "legendFormat": "P99" }
+      ],
+      "title": "Latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "targets": [{ "expr": "sum(rate(praxis_http_requests_total[5m])) by (method)", "legendFormat": "{{method}}" }],
+      "title": "Requests by Method",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "targets": [{ "expr": "sum(rate(praxis_http_request_duration_seconds_sum[5m])) / sum(rate(praxis_http_request_duration_seconds_count[5m]))", "legendFormat": "Avg" }],
+      "title": "Average Latency",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["praxis"],
+  "time": { "from": "now-15m", "to": "now" },
+  "title": "Praxis Proxy Overview",
+  "uid": "praxis-proxy-overview"
+}

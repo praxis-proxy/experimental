@@ -1,0 +1,208 @@
+apiVersion: forge.praxis.dev/v1alpha1
+kind: Environment
+metadata:
+  name: otel-benchmark
+spec:
+  runtime:
+    provider: docker
+    clusterPrefix: otel-bench
+  network:
+    crossCluster: false
+
+  clusters:
+    - name: local
+      ports:
+        - host: 18080
+          container: 30080    # Praxis proxy
+        - host: 18901
+          container: 30901    # Praxis admin/metrics
+        - host: 13000
+          container: 30300    # Grafana
+        - host: 19090
+          container: 30909    # Prometheus
+      stacks:
+        - prometheus
+        - tempo
+        - loki
+        - otel-collector
+        - mock-backends
+        - praxis-deploy
+        - dashboards
+      properties:
+        # Pin chart versions for reproducibility
+        kubePrometheusVersion: "72.6.3"
+        tempoVersion: "1.24.4"
+        lokiStackVersion: "2.10.2"
+
+  stacks:
+    prometheus:
+      description: kube-prometheus-stack (Prometheus + Grafana)
+      steps:
+        - type: helm
+          release: monitoring
+          chart: prometheus-community/kube-prometheus-stack
+          version: "{{ cluster.properties.kubePrometheusVersion }}"
+          namespace: monitoring
+          values:
+            prometheus:
+              prometheusSpec:
+                serviceMonitorSelectorNilUsesHelmValues: false
+                # praxis-proxy is scraped by the ServiceMonitor in
+                # manifests/servicemonitor.yaml. Do NOT also add a static
+                # scrape config for it: two scrapers on one pod produce two
+                # series per counter, and every sum(rate(...)) panel then
+                # reports exactly double the true rate.
+                additionalScrapeConfigs:
+                  # The collector's own telemetry. Without scraping this,
+                  # otelcol_exporter_send_failed_spans is invisible and span
+                  # loss between the collector and Tempo is completely silent.
+                  - job_name: otel-collector
+                    metrics_path: /metrics
+                    scrape_interval: 15s
+                    static_configs:
+                      - targets: ["otel-collector.otel.svc:8888"]
+              service:
+                type: NodePort
+                nodePort: 30909
+            grafana:
+              adminPassword: admin
+              sidecar:
+                datasources:
+                  # This chart provisions its own Prometheus datasource, marked
+                  # default and with a generated uid. Grafana refuses to start
+                  # if two datasources claim default, and our dashboards need
+                  # the stable uid below, so the chart's copy is turned off.
+                  defaultDatasourceEnabled: false
+              # Declared here rather than POSTed to Grafana's API after the
+              # fact. API-created datasources live in Grafana's SQLite, so a
+              # pod restart silently drops them and every dashboard renders
+              # "No data" -- with fixed uids the dashboards keep resolving.
+              additionalDataSources:
+                - name: Prometheus
+                  type: prometheus
+                  uid: prometheus
+                  access: proxy
+                  isDefault: true
+                  url: http://monitoring-kube-prometheus-prometheus.monitoring.svc:9090
+                - name: Tempo
+                  type: tempo
+                  uid: tempo
+                  access: proxy
+                  url: http://tempo.monitoring.svc:3200
+                - name: Loki
+                  type: loki
+                  uid: loki
+                  access: proxy
+                  url: http://loki.monitoring.svc:3100
+              image:
+                tag: 11.6.0
+              service:
+                type: NodePort
+                nodePort: 30300
+        - type: wait
+          resource: deployment/monitoring-grafana
+          namespace: monitoring
+          condition: available
+          timeout: "300s"
+
+    tempo:
+      description: Tempo trace storage
+      steps:
+        - type: helm
+          release: tempo
+          chart: grafana/tempo
+          version: "{{ cluster.properties.tempoVersion }}"
+          namespace: monitoring
+          values:
+            tempo:
+              # ROOT CAUSE FIX for silently dropped spans. Tempo's OTLP gRPC
+              # receiver defaults to a 4 MiB max message size. A collector
+              # batch above that is refused with ResourceExhausted, which the
+              # collector treats as a permanent (non-retryable) error and
+              # discards the WHOLE batch -- 98.7% of spans were lost this way
+              # while every request still returned 200, so the only symptom
+              # was a suspiciously empty Tempo.
+              #
+              # Capping the collector's batch size (see the otel-collector
+              # manifest) avoids tripping the limit, but only by guessing a
+              # batch small enough; richer spans would silently break it
+              # again. Raising the receiver limit is the actual fix, and the
+              # batch cap stays as defence in depth.
+              #
+              # Overriding `receivers` replaces the chart's whole map, which
+              # also drops the unused jaeger/opencensus/zipkin listeners.
+              receivers:
+                otlp:
+                  protocols:
+                    grpc:
+                      endpoint: "0.0.0.0:4317"
+                      max_recv_msg_size_mib: 32
+                    http:
+                      endpoint: "0.0.0.0:4318"
+
+    loki:
+      description: Loki + Promtail log aggregation
+      steps:
+        - type: helm
+          release: loki
+          chart: grafana/loki-stack
+          version: "{{ cluster.properties.lokiStackVersion }}"
+          namespace: monitoring
+          values:
+            loki:
+              persistence:
+                enabled: false
+            promtail:
+              enabled: true
+            grafana:
+              sidecar:
+                datasources:
+                  # Disabled: this chart provisions a Loki datasource without a
+                  # uid, so Grafana generates a random one and the dashboards'
+                  # `uid: loki` reference dangles. The prometheus stack above
+                  # declares Loki with a fixed uid instead.
+                  enabled: false
+
+    otel-collector:
+      description: OpenTelemetry Collector (OTLP → Tempo)
+      steps:
+        - type: exec
+          command: [bash, -c, "kubectl create namespace otel --dry-run=client -o yaml | kubectl apply -f -"]
+        - type: manifest
+          path: stacks/observability/manifests/otel-collector.yaml
+        - type: wait
+          resource: deployment/otel-collector
+          namespace: otel
+          condition: available
+          timeout: "60s"
+
+    mock-backends:
+      description: Fortio echo + llm-d inference-sim
+      steps:
+        - type: manifest
+          path: stacks/mock-backends/manifests/echo-backend.yaml
+        - type: manifest
+          path: stacks/mock-backends/manifests/inference-sim.yaml
+
+    praxis-deploy:
+      description: Deploy Praxis proxy with OTel config
+      steps:
+        - type: exec
+          command: [bash, -c, "kubectl create configmap praxis-config --from-file=praxis.yaml=configs/ai-otel-full.yaml -n default --dry-run=client -o yaml | kubectl apply -f -"]
+        - type: manifest
+          path: manifests/praxis.yaml
+        - type: manifest
+          path: manifests/servicemonitor.yaml
+        - type: wait
+          resource: deployment/praxis-proxy
+          namespace: default
+          condition: available
+          timeout: "120s"
+
+    dashboards:
+      description: Load Grafana dashboards via ConfigMap
+      steps:
+        - type: exec
+          command: [bash, -c, "kubectl -n monitoring create configmap praxis-dashboards --from-file=stacks/observability/dashboards/ --dry-run=client -o yaml | kubectl apply -f -"]
+        - type: exec
+          command: [kubectl, -n, monitoring, label, configmap, praxis-dashboards, grafana_dashboard=1, --overwrite]

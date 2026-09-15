@@ -1,0 +1,502 @@
+{
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No traffic yet"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(praxis_ai_token_rate_limit_tokens_total{kind=\"actual\"})",
+          "legendFormat": "Tokens"
+        }
+      ],
+      "description": "Lifetime sum of tokens **actually** consumed, as reported by the model in its usage block, across every rule. Counts only reconciled requests: a request denied at admission consumes nothing and never appears here. This is a cumulative counter, so it only ever rises \u2014 it answers \"how much have we spent\", not \"how fast\". For rate, read the Token Consumption Rate panel. Source: `praxis_ai_token_rate_limit_tokens_total{kind=\"actual\"}` (Prometheus, 100% of requests).",
+      "title": "Tokens Consumed (total)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "max": 1,
+          "min": 0,
+          "noValue": "No traffic yet",
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.05
+              },
+              {
+                "color": "red",
+                "value": 0.25
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "expr": "(sum(praxis_ai_token_rate_limit_requests_total{decision=\"denied\"}) or vector(0)) / clamp_min(sum(praxis_ai_token_rate_limit_requests_total), 1)",
+          "legendFormat": "Denied share"
+        }
+      ],
+      "description": "Share of all admission decisions, over the life of the process, that were rejected for budget: `denied / (admitted + denied)`. A lifetime ratio, not a rate \u2014 it moves slowly and does not decay, so it keeps showing that a limit was reached earlier even once traffic stops. 0% means no tier has hit its budget yet. Sustained high values on a tier that should not be throttled means `capacity` is too low or `reserved_tokens` is too pessimistic for the real request size. Source: `praxis_ai_token_rate_limit_requests_total{decision=...}`.",
+      "title": "Budget Denial Rate",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(praxis_ai_token_rate_limit_active_reservations)",
+          "legendFormat": "In flight"
+        }
+      ],
+      "description": "Requests admitted and currently in flight, each still holding its `reserved_tokens` estimate against the budget. This is what makes the limiter burst-sensitive: with `reserved_tokens: 200`, 25 concurrent requests pin 5,000 tokens even if each will really use ~68. Should fall back to 0 shortly after traffic stops. A floor that never returns to zero means reservations are leaking \u2014 check the `orphaned` series on Reservation Outcomes. Source: gauge `praxis_ai_token_rate_limit_active_reservations`, refreshed by the cleanup sweep. It is only written while handling a request for that rule, so after traffic stops it freezes at its last value rather than falling to 0 \u2014 a non-zero reading on an idle gateway is stale, not a leak.",
+      "title": "Active Reservations",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "id": 4,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(praxis_ai_token_rate_limit_active_keys)",
+          "legendFormat": "Budget keys"
+        }
+      ],
+      "description": "Number of distinct budget keys being tracked \u2014 one per bucket the limiter is accounting for. In this milestone the key is a per-rule sentinel, so this tracks roughly the number of rules that have seen traffic (2 once both tiers are exercised) rather than per-user buckets. It becomes the cardinality signal once keys are derived from identity: a key count that climbs without bound is a memory concern, since each key holds its own window state. Source: gauge `praxis_ai_token_rate_limit_active_keys`. Like Active Reservations it only advances on the next request for that rule, so it holds its last value while idle.",
+      "title": "Active Budget Keys",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No traffic yet"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "id": 5,
+      "targets": [
+        {
+          "expr": "sum by (rule) (rate(praxis_ai_token_rate_limit_tokens_total{kind=\"actual\"}[1m]))",
+          "legendFormat": "{{rule}} actual"
+        }
+      ],
+      "description": "Real tokens per second per tier, from what the model reported \u2014 not the reserved estimate. This is the number to compare against a tier's `capacity`: at 5,000 tokens/min the free tier's sustainable rate is ~83 tokens/sec. Because it counts `kind=\"actual\"`, it only rises when a response body has been parsed and the reservation settled, so it lags admission by roughly one request duration. Source: `rate(praxis_ai_token_rate_limit_tokens_total{kind=\"actual\"}[1m])`.",
+      "title": "Token Consumption Rate (tokens/sec)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "noValue": "No traffic yet"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "id": 6,
+      "targets": [
+        {
+          "expr": "sum by (decision) (rate(praxis_ai_token_rate_limit_requests_total[5m]))",
+          "legendFormat": "{{decision}}"
+        }
+      ],
+      "description": "Admission decisions per second across all rules \u2014 the limiter's headline behaviour. `admitted` requests were forwarded upstream; `denied` requests were rejected at admission with a 429 and never reached the model, which is why a denial costs no GPU time. Uses a 5-minute window on purpose: a 1-minute window empties about a minute after a burst, so denials from a demo run would vanish before you looked at them. Source: `rate(praxis_ai_token_rate_limit_requests_total[5m])` by `decision`.",
+      "title": "Admitted vs Denied",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "How good the reservation estimate is. `estimated` is `reserved_tokens` charged up front at admission; `actual` is what the model reported; the difference settles as `refunded` (over-reserved, given back) or `overage` (under-reserved, charged extra). `estimated \u2248 actual + refunded` by construction. A large refunded share means `reserved_tokens` is far above real usage, which throttles bursts harder than the nominal budget implies. **If `actual` exactly equals `estimated` and refunded stays flat at zero, reconciliation is not running** \u2014 almost always because `token_rate_limit` was declared *after* `token_count` (response hooks run in reverse declared order). Source: `rate(praxis_ai_token_rate_limit_tokens_total[1m])` by `kind`.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No traffic yet"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "id": 7,
+      "targets": [
+        {
+          "expr": "sum by (kind) (rate(praxis_ai_token_rate_limit_tokens_total[1m]))",
+          "legendFormat": "{{kind}}"
+        }
+      ],
+      "title": "Estimation Accuracy: estimated vs actual vs refunded vs overage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No traffic yet"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "id": 8,
+      "targets": [
+        {
+          "expr": "sum by (result) (rate(praxis_ai_token_rate_limit_reservations_total[1m]))",
+          "legendFormat": "{{result}}"
+        }
+      ],
+      "description": "What happened to each reservation after admission, which is the limiter's own health check.\n\n`reconciled` \u2014 the response body arrived, `token_count` published the real total, and the estimate was squared up (refund or overage applied). This should track your admitted rate.\n\n`orphaned` \u2014 the reservation never settled and the periodic cleanup sweep had to expire it and reclaim its tokens. That happens when a request never reaches the response-body phase: client disconnect, upstream timeout or error, or a crash.\n\nSustained `orphaned` means budget is pinned by requests that never finish, so the effective limit is tighter than configured and denials will appear earlier than the numbers suggest. Source: `rate(praxis_ai_token_rate_limit_reservations_total[1m])` by `result`.",
+      "title": "Reservation Outcomes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Every HTTP response the gateway returned, by status class, from praxis core rather than from the rate-limit filter. Budget denials surface here as `4xx`, so this is the cross-check that a denial on the limiter panels really reached the client as a 429 \u2014 the two should move together. `4xx` rising while `denied` stays flat means the 4xx came from somewhere else (a bad request, an upstream rejection), not from the budget. Source: `rate(praxis_http_requests_total[1m])` by `status_class`, incremented on 100% of requests regardless of trace sampling.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "noValue": "No traffic yet"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "id": 9,
+      "targets": [
+        {
+          "expr": "sum by (status_class) (rate(praxis_http_requests_total[1m]))",
+          "legendFormat": "{{status_class}}"
+        }
+      ],
+      "title": "HTTP Status Classes (429s appear as 4xx)",
+      "type": "timeseries"
+    },
+{
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "How much of each rule's budget the window has already consumed, as a fraction of its configured `capacity`. `premium` and `free` are per-minute rules so they use a 1m window; the `agent-daily` rules use 24h. Capacities are baked into the query because praxis does not export them as metrics \u2014 **if you change `capacity` in `configs/token-budget.yaml`, change the divisor here too, or this panel silently lies.** It sums `kind=\"actual\"`, so it tracks settled usage and slightly under-reads while requests are in flight holding reservations. Each agent rule has its own 10M budget and is plotted separately \u2014 summing them against one divisor would hide a single rule sitting at 100%. Values above 1.0 are possible and deliberately not clipped. Approaching 1.0 means the next requests get 429s.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "No traffic in the window",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 2
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 28
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(praxis_ai_token_rate_limit_tokens_total{kind=\"actual\",rule=\"premium\"}[1m])) / 20000",
+          "legendFormat": "premium (20k/min)"
+        },
+        {
+          "expr": "sum by (rule) (increase(praxis_ai_token_rate_limit_tokens_total{kind=\"actual\",rule=~\"agent-daily.*\"}[24h])) / 10000000",
+          "legendFormat": "{{rule}} (10M/day)"
+        },
+        {
+          "expr": "sum(increase(praxis_ai_token_rate_limit_tokens_total{kind=\"actual\",rule=\"free\"}[1m])) / 5000",
+          "legendFormat": "free (5k/min)"
+        }
+      ],
+      "title": "Budget Headroom (fraction of capacity used)",
+      "type": "timeseries"
+    },
+{
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "`refunded / estimated` per rule \u2014 how much of each up-front reservation is handed back once the model reports real usage. Near 0 means `reserved_tokens` is about right. Near 1 means you reserve far more than you spend, which throttles bursts long before the budget is really exhausted, because every in-flight request pins the full estimate. Read it with Overage Rate: they are the two directions of the same sizing error. Flat at zero while traffic flows usually means reconciliation is not running at all (`token_rate_limit` declared after `token_count`).",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "No reservations settled yet",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 28
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (rule) (rate(praxis_ai_token_rate_limit_tokens_total{kind=\"refunded\"}[5m])) / clamp_min(sum by (rule) (rate(praxis_ai_token_rate_limit_tokens_total{kind=\"estimated\"}[5m])), 0.0001)",
+          "legendFormat": "{{rule}}"
+        }
+      ],
+      "title": "Reservation Efficiency (refunded / estimated)",
+      "type": "timeseries"
+    },
+{
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Tokens per second charged **beyond** the reservation, per rule \u2014 the opposite failure to a large refund share. Non-zero means `reserved_tokens` is too low for the traffic arriving: the request was admitted on a small estimate and then cost more, so the budget is debited after the fact and admission control was momentarily too generous. Sustained overage on an agent rule is the signal to raise `reserved_tokens` \u2014 one agent turn costs ~9,000 tokens, far more than a bare API call.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No overage \u2014 reservations cover actual usage"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 36
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (rule) (rate(praxis_ai_token_rate_limit_tokens_total{kind=\"overage\"}[5m]))",
+          "legendFormat": "{{rule}}"
+        }
+      ],
+      "title": "Overage Rate (tokens/sec beyond reservation)",
+      "type": "timeseries"
+    },
+{
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Time from request receipt to the first non-empty streamed chunk \u2014 what a user actually waits before text appears, as opposed to total request duration. **Streaming only**: the filter fires solely on successful `text/event-stream` responses, so a plain `curl` produces no sample while coding agents, which stream, do. An empty panel means no streaming traffic, not a broken gateway. The metric is a Prometheus *summary* with pre-computed quantiles, so it is read directly rather than through `histogram_quantile`, and summary quantiles cannot be aggregated across labels \u2014 hence `max()`. The `model` label reads `unknown` because no format filter runs upstream in this chain. A summary's quantiles are computed over a rolling window, so this reads **0 rather than empty** once streaming traffic stops — treat 0 as nothing recent, not instant.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No streaming traffic yet"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 36
+      },
+      "id": 13,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "expr": "max(praxis_ai_ttft_seconds{quantile=\"0.5\"})",
+          "legendFormat": "P50"
+        },
+        {
+          "expr": "max(praxis_ai_ttft_seconds{quantile=\"0.95\"})",
+          "legendFormat": "P95"
+        },
+        {
+          "expr": "max(praxis_ai_ttft_seconds{quantile=\"0.99\"})",
+          "legendFormat": "P99"
+        }
+      ],
+      "title": "Time to First Token (streaming only)",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": [
+    "praxis",
+    "ai",
+    "tokens"
+  ],
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "title": "Praxis Token Budget & Rate Limiting",
+  "uid": "praxis-token-budget"
+}

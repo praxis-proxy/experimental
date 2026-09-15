@@ -9,7 +9,7 @@
 #
 #   docker run --rm -p 8080:8080 \
 #     -v "$PWD/gateway.yaml:/etc/praxis/praxis.yaml:ro" \
-#     ghcr.io/praxis-proxy/experimental:latest
+#     ghcr.io/praxis-proxy/experimental:main
 #
 # See docs/gateway-quickstart.md for the full walkthrough.
 
