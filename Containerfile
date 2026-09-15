@@ -176,6 +176,51 @@ COPY LICENSE /licenses/LICENSE
 COPY --from=builder --chown=root:root --chmod=0555 \
     /usr/local/bin/praxis-experimental-server /usr/local/bin/praxis-experimental-server
 
+# Assets for the ai-gateway DEMO, so trying it needs no repository checkout.
+# These are not the image's configuration -- see the note below.
+#
+# The compose file here seeds the rest of them into volumes that the demo's
+# observability services mount, which is what removes the checkout and also means
+# the dashboards can never drift from the binary they describe. Fetch it with the
+# raw URL, or straight out of the image when offline:
+#
+#   id=$(podman create <image>)
+#   podman cp "$id:/usr/share/praxis/demo/compose.yaml" compose.yaml
+#   podman rm "$id"
+#
+# See demos/ai-gateway/docs/quickstart.md.
+#
+# Exactly what the compose path needs and nothing else, about 130 KB. That is
+# small enough to keep in this image rather than publish a second one: a separate
+# demo image would have to be kept in step with this binary, and the version-lock
+# is the whole point. Named file by file rather than by directory, because a
+# directory copy also picks up whatever a developer left in their tree: a
+# gitignored .env holding a real API key, editor state, and the KIND-only
+# datasources this path cannot use.
+#
+# NOTE ON THE IMAGE'S OWN CONFIG. /etc/praxis is deliberately left empty, so a
+# bare `podman run` warns and starts on built-in defaults -- loopback listeners
+# and no filters. The product's sample config, examples/configs/gateway.yaml, is
+# NOT shipped here and none of the files below are a default. Making gateway.yaml
+# the image default is real and wanted, but it is a product decision rather than a
+# demo one: it also needs a default upstream that exists, since that file points
+# at 127.0.0.1:3000 and would answer 502 out of the box.
+COPY demos/ai-gateway/configs/ \
+    /usr/share/praxis/demo/configs/
+COPY demos/ai-gateway/compose/compose.quick.yaml \
+    /usr/share/praxis/demo/compose.yaml
+COPY demos/ai-gateway/compose/tempo.yaml \
+    demos/ai-gateway/compose/prometheus.yaml \
+    demos/ai-gateway/compose/otel-collector.yaml \
+    /usr/share/praxis/demo/stack/
+COPY demos/ai-gateway/observability/perses/config.yaml \
+    demos/ai-gateway/observability/perses/project.json \
+    /usr/share/praxis/demo/perses/
+COPY demos/ai-gateway/observability/perses/dashboards/ \
+    /usr/share/praxis/demo/perses/dashboards/
+COPY demos/ai-gateway/observability/perses/datasources/compose/ \
+    /usr/share/praxis/demo/perses/datasources/
+
 # Numeric UID with no /etc/passwd entry: OpenShift's restricted SCC assigns a
 # UID from the namespace's range regardless of what USER says, and keeps GID 0.
 USER 1001

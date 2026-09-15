@@ -1,0 +1,55 @@
+# Mirrors the KIND collector in stacks/observability/manifests/otel-collector.yaml.
+# The only difference is the Tempo endpoint, which is a compose service name here
+# and a cluster DNS name there.
+#
+# praxis could export OTLP straight to Tempo and skip this hop, but then the
+# collector's own telemetry would not exist and the "Span Export Failures" and
+# "Sampling Ratio Cross-Check" panels of the shared dashboards would be
+# permanently empty on this target only. Keeping the topology identical is what
+# lets one dashboard serve both.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 100
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+
+exporters:
+  debug:
+    verbosity: basic
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+service:
+  # Self-metrics must bind all interfaces, not localhost, or Prometheus cannot
+  # scrape otelcol_* and the export-failure panels stay blank.
+  #
+  # Flat `address:` form, correct for the 0.108.0 collector both targets pin.
+  # From 0.123.0 this key is rejected in favour of a `readers` array -- and the
+  # rename matters beyond syntax: newer collectors publish
+  # otelcol_exporter_sent_spans_total rather than otelcol_exporter_sent_spans,
+  # and drop refused_spans/enqueue_failed_spans altogether, which would blank
+  # the export-failure panels of the shared dashboards. Upgrade both targets and
+  # the dashboard queries together, or not at all.
+  telemetry:
+    metrics:
+      level: normal
+      address: 0.0.0.0:8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug, otlp/tempo]

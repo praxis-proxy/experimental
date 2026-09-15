@@ -1,0 +1,119 @@
+# The ai-gateway demo without Kubernetes.
+#
+# Do not drive this file directly -- run `../demo-podman up` from the demo root.
+# It builds the image, forwards any stored keys and adds the Linux overlay. This
+# file is here to be read, and for the rare direct run:
+#
+#   podman compose up -d
+#
+# Same gateway config, dashboards and verification script as the KIND target in
+# ../forge.yaml; only the orchestration differs.
+#
+# Ollama runs on the host on its default loopback binding and is reached as
+# host.docker.internal, which podman, Docker Desktop and Rancher Desktop all
+# resolve natively. Native Linux docker needs an extra_hosts entry, which
+# compose.linux.yaml supplies and ../demo-podman adds automatically.
+# EVERY published port is bound to 127.0.0.1 on purpose. A bare "8080:8080"
+# binds 0.0.0.0, which would put an UNAUTHENTICATED gateway -- and the admin API,
+# which allows runtime log-level changes and KV writes -- on every interface of
+# your machine. Override the numbers with the *_PORT variables; do not drop the
+# address. configs/server.yaml is the config for a host others may reach.
+name: praxis-ai-gateway
+
+services:
+  praxis:
+    # Built by ../demo-podman on first run. ghcr.io/praxis-proxy/experimental:main
+    # works only once the token-rate-limit filter feature reaches main.
+    image: ${PRAXIS_IMAGE:-praxis-experimental:ai-gw}
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
+      - "127.0.0.1:${ANTHROPIC_PORT:-8083}:8081"
+      - "127.0.0.1:${OPENROUTER_PORT:-8084}:8082"
+      - "127.0.0.1:${ADMIN_PORT:-9901}:9901"
+    volumes:
+      # ONE config, every provider. /etc/praxis/praxis.yaml is the path the
+      # server resolves with no --config; see ../README.md.
+      - ../configs/laptop.yaml:/etc/praxis/praxis.yaml:ro
+    environment:
+      # praxis-core falls back to this when the config omits telemetry.otlp_endpoint,
+      # which is what lets one config file serve both targets. The KIND target
+      # points the same variable at the in-cluster collector.
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+      OTEL_SERVICE_NAME: praxis
+      # credential_injection resolves these at construction. An absent variable
+      # is fatal, while an empty value lets the gateway start and makes that
+      # provider return its own authentication error if called.
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+    depends_on:
+      # Not service_healthy: these images are distroless with no usable
+      # healthcheck command, and praxis does not need either to serve traffic.
+      otel-collector:
+        condition: service_started
+
+  otel-collector:
+    # Pinned to the same version as stacks/observability/manifests/otel-collector.yaml
+    # on the KIND target: the shared dashboards query collector self-metrics, whose
+    # names changed after 0.108.0 (see compose/otel-collector.yaml).
+    image: otel/opentelemetry-collector-contrib:0.108.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "127.0.0.1:${COLLECTOR_METRICS_PORT:-8888}:8888"
+    depends_on:
+      tempo:
+        condition: service_started
+
+  tempo:
+    image: grafana/tempo:2.8.1
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "127.0.0.1:${TEMPO_PORT:-3200}:3200"
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yaml
+      # Tempo's metrics generator remote-writes span metrics and service graphs
+      # here, which is what the span-derived dashboard panels query.
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  perses:
+    image: persesdev/perses:v0.51.0
+    command: ["--config=/etc/perses/config.yaml"]
+    volumes:
+      - ../observability/perses/config.yaml:/etc/perses/config.yaml:ro
+      # Provisioning recurses, so the shared project and dashboards mount
+      # alongside the compose-specific datasource URLs. The dashboards are the
+      # same files the KIND target provisions, which is the point.
+      - ../observability/perses/project.json:/etc/perses/demo/provisioning/project.json:ro
+      - ../observability/perses/dashboards:/etc/perses/demo/provisioning/dashboards:ro
+      - ../observability/perses/datasources/compose:/etc/perses/demo/provisioning/datasources:ro
+      - perses-data:/perses
+    ports:
+      - "127.0.0.1:${PERSES_PORT:-8081}:8080"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      tempo:
+        condition: service_started
+
+volumes:
+  tempo-data: {}
+  prometheus-data: {}
+  perses-data: {}

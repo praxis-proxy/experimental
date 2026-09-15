@@ -1,0 +1,20 @@
+{
+  "kind": "GlobalDatasource",
+  "metadata": {
+    "name": "tempo"
+  },
+  "spec": {
+    "default": false,
+    "plugin": {
+      "kind": "TempoDatasource",
+      "spec": {
+        "proxy": {
+          "kind": "HTTPProxy",
+          "spec": {
+            "url": "http://tempo:3200"
+          }
+        }
+      }
+    }
+  }
+}

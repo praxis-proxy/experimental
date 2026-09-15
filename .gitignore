@@ -28,3 +28,8 @@ demos/*/.forge/
 
 # Benchmark output (regenerate with scripts/benchmark.sh)
 demos/otel-benchmark/results/
+
+# Written by the ai-gateway demo scripts: .env holds provider API keys (mode
+# 600), .demo-podman / .demo-kind remember the last provider. Never committed.
+.env
+.demo-*

@@ -92,7 +92,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Total time per second attributable to each filter, which reorders the ranking against raw P99: a fast filter that runs on every request can cost more wall clock than a slow one that rarely fires. Deliberately mixes planes \u2014 the quantile is from **sampled** span metrics (valid under sampling), the request rate from `praxis_http_requests_total`, a Prometheus counter covering **100%** of requests. Using the span-derived call rate here instead would under-report by exactly the sampling factor while looking entirely plausible.",
+      "description": "Time attributable to each filter per second: its P99 multiplied by ITS OWN invocation rate, which genuinely reorders the ranking against raw P99 \u2014 a slow filter that runs rarely can matter less than a fast one on every request. **Both series come from the sampled span-metrics plane**, so under sampling the product under-reports by the sampling factor; the demo runs `sampling_rate: 1.0`, where it is exact. An earlier version multiplied every filter by `scalar(sum(rate(praxis_http_requests_total)))` \u2014 one constant for all of them, which cannot reorder anything and so could not do what this panel claims. Use it for relative ranking, not as an absolute latency budget.",
       "fieldConfig": {
         "defaults": {
           "unit": "s",
@@ -118,11 +118,11 @@
       },
       "targets": [
         {
-          "expr": "topk(10, histogram_quantile(0.99, sum by (span_name, le) (rate(traces_spanmetrics_latency_bucket{service=\"praxis\"}[5m]))) * scalar(sum(rate(praxis_http_requests_total[5m]))))",
+          "expr": "topk(10, histogram_quantile(0.99, sum by (span_name, le) (rate(traces_spanmetrics_latency_bucket{service=\"praxis\"}[5m]))) * on (span_name) group_left() sum by (span_name) (rate(traces_spanmetrics_calls_total{service=\"praxis\"}[5m])))",
           "legendFormat": "{{span_name}}"
         }
       ],
-      "title": "Weighted Filter Cost (sampled P99 x true request rate)",
+      "title": "Weighted Filter Cost \u2014 P99 x that filter's own call rate",
       "type": "timeseries"
     },
     {

@@ -46,7 +46,19 @@ praxis-experimental-filters = { path = "../praxis-experimental-filters" }
 # Praxis core (crates.io) — for constructing the SubRequestClient that
 # `build_full_registry` requires. Keep the 0.5.x line in lockstep with the
 # git-pinned praxis-ai-proxy crate below so `FilterRegistry` unifies.
-praxis-filter = { version = "0.5.4", package = "praxis-proxy-filter" }
+# basic-auth-filter is off by default upstream, so a config naming `basic_auth`
+# dies with "unknown filter type". It is the cheap gate for a human-driven client
+# on a shared host; it is NOT usable in front of a coding agent, which sends its
+# own Authorization header and would collide. See docs/quickstart.md.
+praxis-filter = { version = "0.5.4", package = "praxis-proxy-filter", features = [
+  "basic-auth-filter",
+  # The Praxis Policy Engine, off by default upstream. It is the only thing in
+  # this image that can validate a per-caller credential: multi-source JWT
+  # identity, APL route policy and RFC 8693 token exchange. Without it the
+  # gateway can swap a client key for a provider key but cannot check the client
+  # key. See demos/ai-gateway/docs/quickstart.md.
+  "policy-engine",
+] }
 praxis-core = { version = "0.5.4", package = "praxis-proxy-core" }
 # praxis-ai-proxy's server constructs AdminEndpointOptions, which
 # praxis-proxy-protocol gates behind its `admin-api` feature without

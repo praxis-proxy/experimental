@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# The AI gateway demo on podman. ./demo-docker is the same thing on docker.
+#
+#   ./demo-podman up              start the gateway and the dashboards
+#   ./demo-podman verify          run the checks
+#   ./demo-podman urls            print the dashboard links
+#   ./demo-podman down            stop and clean up
+#   ./demo-podman remember openai store a provider key for your own curls
+#   ./demo-podman forget openai   delete it again
+#
+# No provider argument: the stack runs configs/laptop.yaml, which serves every
+# provider from one file and needs no keys to start. The
+# gateway-holds-the-keys deployment is configs/server.yaml -- see
+# docs/quickstart.md. docs/podman.md has these same steps run by hand.
+set -euo pipefail
+
+cd "$(dirname "$0")"
+# ./demo-docker execs this with the engine already chosen; anything else is
+# podman. It is never guessed from what happens to be installed: on a machine
+# with both, starting the stack on one and looking for it on the other is a
+# frustrating ten minutes.
+ENGINE="${DEMO_ENGINE:-podman}"
+DEMO_CMD="./demo-${ENGINE}"
+# shellcheck source=scripts/demo-lib.sh
+. scripts/demo-lib.sh
+
+# Overridable so this can run alongside the KIND target, which holds host ports
+# of its own.
+GW_PORT="${GATEWAY_PORT:-8080}"
+ANTHROPIC="${ANTHROPIC_PORT:-8083}"
+OPENROUTER="${OPENROUTER_PORT:-8084}"
+ADMIN="${ADMIN_PORT:-9901}"
+PERSES="${PERSES_PORT:-8081}"
+PROM="${PROMETHEUS_PORT:-9090}"
+TEMPO="${TEMPO_PORT:-3200}"
+
+compose_cmd() {
+  local -a files=(-f compose.yaml)
+  # Native Linux docker does not resolve host.docker.internal. Applying the
+  # overlay everywhere would break Rancher Desktop, where the same entry
+  # resolves to the VM and the gateway answers 502.
+  if [ "$(uname -s)" = "Linux" ]; then
+    files+=(-f compose.linux.yaml)
+  fi
+  (cd compose && "${ENGINE}" compose "${files[@]}" "$@")
+}
+
+up() {
+  require_engine "${ENGINE}"
+  ensure_image "${ENGINE}"
+  ensure_ollama
+
+  say "starting on ${ENGINE} compose"
+  compose_cmd up -d
+  printf '  waiting for the gateway'
+  for _ in $(seq 1 60); do
+    # The admin health endpoint, not the proxy port: GET / on the proxy is
+    # forwarded upstream, where a hosted provider answers 401, which says
+    # nothing about whether praxis is ready.
+    if curl --fail --silent --max-time 2 --output /dev/null "http://localhost:${ADMIN}/healthy"; then
+      printf ' ok\n'
+      print_urls "${GW_PORT}" "${ANTHROPIC}" "${OPENROUTER}" \
+        "${ADMIN}" "${PERSES}" "${PROM}"
+      return 0
+    fi
+    printf '.'
+    sleep 2
+  done
+  printf '\n'
+  die "gateway did not come up. Logs: (cd compose && ${ENGINE} compose logs praxis)"
+}
+
+down() {
+  require_engine "${ENGINE}"
+  say "stopping the compose stack"
+  compose_cmd down -v
+}
+
+usage() {
+  cat <<'USAGE'
+Usage: ./demo-podman <command>                 (or ./demo-docker, for docker)
+
+  up                  start the gateway and the dashboards
+  verify              run the checks
+  urls                print the dashboard links
+  down                stop and clean up
+  remember <provider> store a provider key, for your own hosted calls
+  forget <provider>   delete a stored key
+
+The gateway runs configs/laptop.yaml: one config, every provider. Hosted-provider
+variables may be empty; Ollama needs no provider credential.
+  :8080  Ollama and OpenAI, picked by the model you name
+  :8083  Anthropic     :8084  OpenRouter
+Providers that take a key: openai, anthropic, openrouter.
+USAGE
+}
+
+cmd="${1:-}"
+shift || true
+
+case "${cmd}" in
+  remember)
+    [ -n "${1:-}" ] || die "which provider? e.g. ./demo-podman remember openai"
+    remember_key "$1"
+    exit 0
+    ;;
+  forget)
+    [ -n "${1:-}" ] || die "which provider? e.g. ./demo-podman forget openai"
+    var="$(key_var_for "$1")" || die "unknown provider '$1'. Known: $(provider_names)"
+    forget_key "${var}"
+    exit 0
+    ;;
+esac
+
+resolve_mode
+
+case "${cmd}" in
+  up) up ;;
+  verify) run_verify "${GW_PORT}" "${PROM}" "${TEMPO}" ;;
+  urls) print_urls "${GW_PORT}" "${ANTHROPIC}" "${OPENROUTER}" \
+    "${ADMIN}" "${PERSES}" "${PROM}" ;;
+  down) down ;;
+  '' | -h | --help | help) usage ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac

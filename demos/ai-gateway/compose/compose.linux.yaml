@@ -1,0 +1,9 @@
+# Overlay for native Linux docker, where host.docker.internal is not resolved
+# for you. Do NOT fold this into compose.yaml: on Rancher Desktop the same entry
+# resolves to the VM's own address and the gateway answers 502.
+#
+#   docker compose -f compose.yaml -f compose.linux.yaml up -d
+services:
+  praxis:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

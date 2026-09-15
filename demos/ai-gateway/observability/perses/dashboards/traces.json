@@ -1,0 +1,233 @@
+{
+  "kind": "Dashboard",
+  "metadata": {
+    "name": "traces",
+    "project": "praxis"
+  },
+  "spec": {
+    "display": {
+      "name": "Praxis OTel Traces"
+    },
+    "panels": {
+      "0_0": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Recent Traces",
+            "description": "The most recent traces Tempo has stored, newest first. Click a trace ID to open the waterfall and see the per-filter span breakdown for that single request. This is the sampled plane: at `sampling_rate: 1.0` (what this demo sets) every request appears; at a lower rate you see only the sampled fraction, so absence here is not evidence a request did not happen. Empty right after deploy is expected \u2014 Tempo needs a scrape interval or two before the first traces are queryable."
+          },
+          "plugin": {
+            "kind": "TraceTable",
+            "spec": {}
+          },
+          "queries": [
+            {
+              "kind": "TraceQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "TempoTraceQuery",
+                  "spec": {
+                    "datasource": {
+                      "kind": "TempoDatasource",
+                      "name": "tempo"
+                    },
+                    "query": "{}"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "0_1": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Error Traces",
+            "description": "Traces whose root span carries an error status. Use it to jump straight from \"something is failing\" to the exact request and the filter that produced the error, without scrolling the full trace list. Empty is the healthy state and is what you should normally see in this demo \u2014 a 429 from the budget is a deliberate rejection, not a span error, so rate-limited requests do **not** show up here. Sampled plane: an error on an unsampled request leaves no trace behind."
+          },
+          "plugin": {
+            "kind": "TraceTable",
+            "spec": {}
+          },
+          "queries": [
+            {
+              "kind": "TraceQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "TempoTraceQuery",
+                  "spec": {
+                    "datasource": {
+                      "kind": "TempoDatasource",
+                      "name": "tempo"
+                    },
+                    "query": "{status = error}"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "0_2": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Slow Traces (>100ms)",
+            "description": "Traces whose total duration exceeded 100ms, the tail you would actually investigate. Against a real model nearly every request qualifies \u2014 inference dominates and a small local model still takes ~300ms \u2014 so treat this as a sorted latency list for this demo rather than an alert. The useful comparison is between the root duration here and the per-filter spans inside the trace: if the root is slow but every `filter:*` span is sub-millisecond, the time is upstream in the model, not in the gateway."
+          },
+          "plugin": {
+            "kind": "TraceTable",
+            "spec": {}
+          },
+          "queries": [
+            {
+              "kind": "TraceQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "TempoTraceQuery",
+                  "spec": {
+                    "datasource": {
+                      "kind": "TempoDatasource",
+                      "name": "tempo"
+                    },
+                    "query": "{duration > 100ms}"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "0_3": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Span Export Failures (collector -> Tempo)",
+            "description": "Whether the trace pipeline is losing data between the OTel collector and Tempo, which is otherwise completely silent \u2014 spans vanish while every request still returns 200.\n\n`sent OK` \u2014 spans successfully delivered to Tempo. `send failed` \u2014 Tempo rejected the batch; the most common cause is a batch larger than Tempo's OTLP gRPC receive limit, which is rejected as `ResourceExhausted` and dropped **whole**. `enqueue failed` \u2014 the exporter queue was full. `refused (memory_limiter)` \u2014 the collector shed load near its memory cap instead of being OOM-killed, which loses less than a kill would.\n\nAnything but `sent OK` sustained above zero means traces are being lost and every span-derived panel is under-reporting. All exporter series are filtered to `exporter=\"otlp/tempo\"`, because the pipeline also has a `debug` exporter that would otherwise double the counts."
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "yAxis": {
+                "format": {
+                  "unit": "decimal"
+                }
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "sum(rate(otelcol_exporter_send_failed_spans{exporter=\"otlp/tempo\"}[5m]))",
+                    "seriesNameFormat": "send failed"
+                  }
+                }
+              }
+            },
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "sum(rate(otelcol_exporter_enqueue_failed_spans{exporter=\"otlp/tempo\"}[5m]))",
+                    "seriesNameFormat": "enqueue failed"
+                  }
+                }
+              }
+            },
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "sum(rate(otelcol_processor_refused_spans{processor=\"memory_limiter\"}[5m]))",
+                    "seriesNameFormat": "refused (memory_limiter)"
+                  }
+                }
+              }
+            },
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "sum(rate(otelcol_exporter_sent_spans{exporter=\"otlp/tempo\"}[5m]))",
+                    "seriesNameFormat": "sent OK"
+                  }
+                }
+              }
+            }
+          ],
+          "links": [
+            {
+              "url": "/projects/praxis/dashboards/filter-latency",
+              "name": "Filter latency",
+              "tooltip": "Span-derived latency metrics",
+              "targetBlank": false
+            }
+          ]
+        }
+      }
+    },
+    "layouts": [
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": {
+            "title": "Trace Search",
+            "collapse": {
+              "open": true
+            }
+          },
+          "items": [
+            {
+              "x": 0,
+              "y": 1,
+              "width": 24,
+              "height": 12,
+              "content": {
+                "$ref": "#/spec/panels/0_0"
+              }
+            },
+            {
+              "x": 0,
+              "y": 13,
+              "width": 12,
+              "height": 10,
+              "content": {
+                "$ref": "#/spec/panels/0_1"
+              }
+            },
+            {
+              "x": 12,
+              "y": 13,
+              "width": 12,
+              "height": 10,
+              "content": {
+                "$ref": "#/spec/panels/0_2"
+              }
+            },
+            {
+              "x": 0,
+              "y": 23,
+              "width": 24,
+              "height": 8,
+              "content": {
+                "$ref": "#/spec/panels/0_3"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "duration": "1h"
+  }
+}

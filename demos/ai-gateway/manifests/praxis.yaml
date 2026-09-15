@@ -24,9 +24,26 @@ spec:
           # bare entrypoint would resolve praxis.yaml anyway, but relying on
           # that is fragile -- state it where a reader of this manifest sees it.
           args: ["-c", "/etc/praxis/praxis.yaml"]
+          env:
+            # The config deliberately omits telemetry.otlp_endpoint so the same
+            # file also works under compose; praxis-core reads this instead.
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector.otel.svc:4317"
+            - name: OTEL_SERVICE_NAME
+              value: praxis
+          # Provider variables consumed by credential_injection. demo-kind always
+          # creates all three keys; an empty value starts successfully and leaves
+          # that provider unavailable without blocking Ollama.
+          envFrom:
+            - secretRef:
+                name: praxis-provider-keys
           ports:
             - containerPort: 8080
               name: proxy
+            - containerPort: 8081
+              name: anthropic
+            - containerPort: 8082
+              name: openrouter
             - containerPort: 9901
               name: admin
           volumeMounts:
@@ -68,10 +85,21 @@ spec:
   selector:
     app: praxis-proxy
   ports:
+    # All three gateway listeners, not just :8080 -- configs/laptop.yaml serves
+    # Anthropic on :8081 and OpenRouter on :8082, and without these the KIND
+    # entry point silently reaches only the OpenAI-compatible chain.
     - port: 8080
       targetPort: 8080
       nodePort: 30080
       name: proxy
+    - port: 8081
+      targetPort: 8081
+      nodePort: 30081
+      name: anthropic
+    - port: 8082
+      targetPort: 8082
+      nodePort: 30082
+      name: openrouter
     - port: 9901
       targetPort: 9901
       nodePort: 30901

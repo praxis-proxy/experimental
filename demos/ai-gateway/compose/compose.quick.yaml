@@ -1,0 +1,146 @@
+# The AI gateway demo with no repository checkout.
+#
+#   podman pull ghcr.io/praxis-proxy/experimental:main
+#   id=$(podman create ghcr.io/praxis-proxy/experimental:main)
+#   podman cp "$id:/usr/share/praxis/demo/compose.yaml" compose.yaml && podman rm "$id"
+#   podman compose up -d
+#
+# Every config this stack needs is baked into the praxis image under
+# /usr/share/praxis/demo. The `seed` service lays them out into volumes that the
+# other services mount, so nothing here bind-mounts a path from your disk and
+# the dashboards can never drift from the binary they describe.
+#
+# One config serves every provider, so there is nothing to pick. Supply a key
+# only if you want to call a hosted provider yourself:
+#   OPENAI_API_KEY=sk-... podman compose up -d
+#
+# The developer flow, which does use a checkout, is ../demo-podman.
+# EVERY published port is bound to 127.0.0.1 on purpose. A bare "8080:8080"
+# binds 0.0.0.0, which would put an UNAUTHENTICATED gateway -- and the admin API,
+# which allows runtime log-level changes and KV writes -- on every interface of
+# your machine. Override the numbers with the *_PORT variables; do not drop the
+# address. configs/server.yaml is the config for a host others may reach.
+name: praxis-ai-gateway
+
+services:
+  # Runs once, before anything else, and exits. Root because a fresh named
+  # volume is root-owned; it is the only service here that is not the demo.
+  seed:
+    image: ${PRAXIS_IMAGE:-ghcr.io/praxis-proxy/experimental:main}
+    user: "0"
+    entrypoint: ["/bin/sh", "-euc"]
+    command:
+      - |
+        src=/usr/share/praxis/demo
+        cp "$$src/configs/laptop.yaml" /out/praxis/praxis.yaml
+        cp "$$src"/stack/*.yaml /out/stack/
+        cp "$$src"/perses/config.yaml /out/perses/
+        mkdir -p /out/perses/provisioning/dashboards /out/perses/provisioning/datasources
+        cp "$$src"/perses/project.json /out/perses/provisioning/
+        cp "$$src"/perses/dashboards/*.json /out/perses/provisioning/dashboards/
+        cp "$$src"/perses/datasources/*.json /out/perses/provisioning/datasources/
+        echo "seeded configs/laptop.yaml"
+    volumes:
+      - praxis-config:/out/praxis
+      - stack-config:/out/stack
+      - perses-config:/out/perses
+
+  praxis:
+    image: ${PRAXIS_IMAGE:-ghcr.io/praxis-proxy/experimental:main}
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
+      - "127.0.0.1:${ANTHROPIC_PORT:-8083}:8081"
+      - "127.0.0.1:${OPENROUTER_PORT:-8084}:8082"
+      - "127.0.0.1:${ADMIN_PORT:-9901}:9901"
+    volumes:
+      # WORKDIR is /etc/praxis and the server resolves praxis.yaml there.
+      - praxis-config:/etc/praxis:ro
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+      OTEL_SERVICE_NAME: praxis
+      # credential_injection resolves these at construction. An absent variable
+      # is fatal, while an empty value lets the gateway start and makes that
+      # provider return its own authentication error if called.
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+
+  otel-collector:
+    # Pinned to match the KIND target: the shared dashboards query collector
+    # self-metrics, whose names changed after 0.108.0.
+    image: otel/opentelemetry-collector-contrib:0.108.0
+    command: ["--config=/etc/stack/otel-collector.yaml"]
+    volumes:
+      - stack-config:/etc/stack:ro
+    ports:
+      - "127.0.0.1:${COLLECTOR_METRICS_PORT:-8888}:8888"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      tempo:
+        condition: service_started
+
+  tempo:
+    image: grafana/tempo:2.8.1
+    command: ["-config.file=/etc/stack/tempo.yaml"]
+    volumes:
+      - stack-config:/etc/stack:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "127.0.0.1:${TEMPO_PORT:-3200}:3200"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/stack/prometheus.yaml
+      # Tempo's metrics generator remote-writes span metrics here, which is what
+      # the span-derived dashboard panels query.
+      - --web.enable-remote-write-receiver
+    volumes:
+      - stack-config:/etc/stack:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+
+  perses:
+    image: persesdev/perses:v0.51.0
+    command: ["--config=/etc/perses/demo/config.yaml"]
+    volumes:
+      # Mounted at the demo subtree, never at /etc/perses: that would hide the
+      # image's plugins-archive and Perses would provision nothing while still
+      # answering 200.
+      - perses-config:/etc/perses/demo:ro
+      - perses-data:/perses
+    ports:
+      - "127.0.0.1:${PERSES_PORT:-8081}:8080"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      prometheus:
+        condition: service_healthy
+      tempo:
+        condition: service_started
+
+volumes:
+  praxis-config:
+  stack-config:
+  perses-config:
+  tempo-data:
+  prometheus-data:
+  perses-data:

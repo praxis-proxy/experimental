@@ -1,0 +1,89 @@
+# Perses on the KIND target.
+#
+# Reads the same project and dashboard files the compose target mounts, supplied
+# here as ConfigMaps built from observability/perses/ by the forge stack. Only
+# the datasource URLs differ between targets, which is why they live in
+# per-target subdirectories.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: perses
+  namespace: monitoring
+  labels:
+    app: perses
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: perses
+  template:
+    metadata:
+      labels:
+        app: perses
+    spec:
+      containers:
+        - name: perses
+          image: persesdev/perses:v0.51.0
+          args: ["--config=/etc/perses/config.yaml"]
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: config
+              mountPath: /etc/perses/config.yaml
+              subPath: config.yaml
+            - name: project
+              mountPath: /etc/perses/demo/provisioning/project
+            - name: dashboards
+              mountPath: /etc/perses/demo/provisioning/dashboards
+            - name: datasources
+              mountPath: /etc/perses/demo/provisioning/datasources
+            # database.file writes here; emptyDir keeps the pod stateless, since
+            # every resource is re-provisioned from the ConfigMaps on start.
+            - name: data
+              mountPath: /perses
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: perses-config
+        - name: project
+          configMap:
+            name: perses-project
+        - name: dashboards
+          configMap:
+            name: perses-dashboards
+        - name: datasources
+          configMap:
+            name: perses-datasources
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: perses
+  namespace: monitoring
+  labels:
+    app: perses
+spec:
+  type: NodePort
+  selector:
+    app: perses
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      nodePort: 30091

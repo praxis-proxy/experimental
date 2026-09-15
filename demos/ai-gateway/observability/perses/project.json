@@ -1,0 +1,11 @@
+{
+  "kind": "Project",
+  "metadata": {
+    "name": "praxis"
+  },
+  "spec": {
+    "display": {
+      "name": "Praxis AI gateway"
+    }
+  }
+}

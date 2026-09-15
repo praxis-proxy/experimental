@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# The AI gateway demo on docker. Everything is in ./demo-podman; this only
+# changes which engine it drives.
+#
+#   ./demo-docker up
+#
+# See docs/podman.md -- the two are interchangeable, and both drive the same
+# compose project, so pick one and stay with it for a given stack.
+set -euo pipefail
+DEMO_ENGINE=docker exec "$(dirname "$0")/demo-podman" "$@"

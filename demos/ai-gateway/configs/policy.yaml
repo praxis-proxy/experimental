@@ -1,0 +1,83 @@
+# Policy document for the `policy` filter — per-caller token validation.
+#
+# This is NOT a praxis gateway config. It is the separate document that
+# `- filter: policy` loads via `config_path`. configs/server.yaml enables it by
+# default, so a server holding real provider keys authenticates its callers.
+#
+# THERE IS NO SECRET IN THIS FILE, deliberately. It names a PUBLIC key, which the
+# gateway uses to verify tokens it cannot mint. Generate the keypair once:
+#
+#   ./scripts/issue-token.sh init
+#
+# then mount the public half and run:
+#
+#   podman run -d --name praxis --network host \
+#     -e OPENAI_API_KEY=sk-... \
+#     -v ~/.config/praxis-ai-gateway/jwt/public.pem:/etc/praxis/jwt-public.pem:ro \
+#     <image> -c /usr/share/praxis/demo/configs/server.yaml
+#
+# The private half never leaves the machine that issues tokens. HS256 with a
+# shared secret would have had to live in this file, which is committed — that is
+# why this is RS256.
+#
+# WHAT THIS BUYS. Without it the gateway swaps a client credential for the real
+# provider key but never checks what the client sent, so any string is accepted
+# and an IP range is the only perimeter. With it, each caller presents a JWT that
+# praxis validates before the request goes anywhere. That is what makes "issue a
+# key per developer, swap it for the provider key" real rather than aspirational.
+# It is also the prerequisite for per-caller budgets: a budget rule can only key
+# on an identity once something publishes one.
+#
+# It fits coding agents exactly. Every harness already sends a bearer token —
+# Claude Code's ANTHROPIC_AUTH_TOKEN, Codex's env_key, opencode's apiKey — so the
+# JWT goes precisely where a dummy placeholder went. Nothing collides, which is
+# the difference from basic_auth.
+#
+# FOR REAL IDENTITY MANAGEMENT, point `decoding_key` at your IdP instead:
+#
+#     decoding_key:
+#       kind: jwks_url
+#       url: "https://idp.example.com/.well-known/jwks.json"
+#
+# and delete scripts/issue-token.sh.
+#
+# BE CLEAR ABOUT WHAT THAT DOES AND DOES NOT BUY. A JWKS endpoint gives you key
+# ROTATION, not per-token revocation. Validation here is offline: praxis checks a
+# signature, an issuer, an audience and an expiry, and nothing else. It cannot
+# learn that one already-issued token was withdrawn. Revoking ONE person needs
+# something this filter does not do -- token introspection, a denylist, or short
+# expirations you refresh -- and with the local keypair it means rotating the key
+# and reissuing everyone. Keep lifetimes short; scripts/issue-token.sh defaults to
+# 30 days for that reason.
+
+plugins:
+  - name: caller-identity
+    kind: identity/jwt
+    hooks: [identity.resolve]
+    mode: sequential
+    priority: 10
+    # fail: a missing, expired or invalid token is a 401 carrying
+    # WWW-Authenticate and an X-Policy-Violation header -- not a pass-through.
+    on_error: fail
+    config:
+      # The same header every coding agent already populates.
+      header: Authorization
+      trusted_issuers:
+          # Must match what scripts/issue-token.sh puts in `iss` and `aud`.
+        - issuer: "https://praxis-ai-gateway.local"
+          audiences: ["praxis-ai-gateway"]
+          algorithms: ["RS256"]
+          decoding_key:
+            # Read once at construction. A missing file stops the gateway rather
+            # than starting it with authentication silently disabled.
+            kind: pem_file
+            path: /etc/praxis/jwt-public.pem
+          # Tolerance for clock skew between the issuer and this gateway.
+          leeway_seconds: 60
+      claim_mapper: standard
+
+# No `routes:` here, so every validated caller is allowed everywhere. Identity is
+# resolved, the request passes through, and `sub` is published for anything that
+# later learns to consume it. Add APL route policy to authorise per path, per
+# model or per MCP tool, and delegators for RFC 8693 token exchange when the
+# upstream wants a different token than the caller presented.

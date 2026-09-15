@@ -1,0 +1,475 @@
+# Your own machine. One config, 1..N providers, keys optional.
+#
+#   podman run -d --name praxis \
+#     -p 127.0.0.1:8080:8080 -p 127.0.0.1:8081:8081 \
+#     -p 127.0.0.1:8082:8082 -p 127.0.0.1:9901:9901 \
+#     -e OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
+#     -e ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
+#     -e OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" \
+#     <image> -c /usr/share/praxis/demo/configs/laptop.yaml
+#
+#   :8080   Ollama AND OpenAI -- one port, picked by the model you name
+#   :8081   Anthropic
+#   :8082   OpenRouter
+#
+# ONE container, ONE praxis process. Register :8080 in your coding agent and name
+# whichever model you want; the gateway decides where it goes. Ports you never
+# call cost nothing. Registering these: docs/quickstart.md.
+#
+# THE GATEWAY HOLDS THE KEYS, so your coding agent never does -- it authenticates
+# with any placeholder and cannot leak a real key. That is the same
+# credential_injection this file's sibling configs/server.yaml uses; the ONLY
+# difference between the two files is that server.yaml also authenticates its
+# callers with a JWT, because a shared host cannot be left open.
+#
+# KEYS ARE OPTIONAL. `${VAR:-}` above passes an EMPTY value when you have not set
+# one, and an empty credential is accepted at startup -- so the gateway comes up
+# with no keys at all and Ollama works immediately. A provider you have no key for
+# simply answers with its own 401 when you call it, instead of stopping the
+# gateway. Leave the variable off entirely and startup DOES fail: env_var is
+# resolved at construction, and an absent variable is fatal. Hence `:-`.
+#
+# WHY THESE THREE PORTS AND NOT ONE.
+#
+# Several providers CAN share one chain. What makes them shareable is that
+# everything which differs per provider has a per-cluster form:
+#
+#   load_balancer.clusters[].http.authority   the upstream Host header
+#   load_balancer.clusters[].tls.sni          the TLS server name
+#   credential_injection.clusters[]           the key to attach
+#   router.routes[].headers                   which cluster a request picks
+#
+# Three things have NO per-cluster form, and each one forces a separate chain:
+#
+#   1. token_count takes a single `provider:`, so one chain can only parse one
+#      provider's usage shape. Ollama and OpenAI share `openai`; Anthropic does
+#      not. (ai@v0.3.0 filters/src/token_usage/count.rs:116)
+#   2. Anthropic's /v1/messages body differs from Chat Completions, and the only
+#      translation filter that exists is anthropic_to_openai -- the opposite
+#      direction. There is no openai_to_anthropic today.
+#   3. path_rewrite is unconditional: it has no match clause, and Route has no
+#      rewrite field. OpenRouter needs "/api" prepended and OpenAI must not have
+#      it, so they cannot share a chain.
+#
+# Provider fallback -- trying OpenAI, then another on failure -- is a different
+# filter, iterative_request_router, which is compiled in but not used here. See
+# examples/configs/gateway.yaml for its shape.
+
+insecure_options:
+  # Only for host.docker.internal, a private address, used to reach your Ollama.
+  allow_private_endpoints: true
+  # Required for the admin bind below. Praxis refuses a non-loopback admin
+  # address without this, which is the right default -- see the note there.
+  allow_public_admin: true
+
+admin:
+  # One admin listener for the process. Every chain reports into the same
+  # /metrics, labelled by rule, so budgets stay distinguishable.
+  #
+  # 0.0.0.0 INSIDE THE CONTAINER, not 127.0.0.1. A loopback bind here cannot be
+  # reached by `-p 9901:9901` at all -- the publish would silently go nowhere.
+  # The container's network namespace is the boundary, and the publish address is
+  # what keeps this off your network: use `-p 127.0.0.1:9901:9901`.
+  #
+  # Praxis refuses a non-loopback admin bind unless insecure_options.
+  # allow_public_admin is set, which is why that flag is above. Outside a
+  # container -- a bare binary on a host -- prefer 127.0.0.1 and drop both.
+  # /metrics has no authentication, so never publish this port to a network.
+  address: "0.0.0.0:9901"
+
+telemetry:
+  # Nothing is exported unless OTEL_EXPORTER_OTLP_ENDPOINT is set.
+  sampling_rate: 1.0
+
+listeners:
+  - name: main
+    address: "0.0.0.0:8080"
+    filter_chains: [openai-compatible]
+  - name: anthropic
+    address: "0.0.0.0:8081"
+    filter_chains: [anthropic]
+  - name: openrouter
+    address: "0.0.0.0:8082"
+    filter_chains: [openrouter]
+
+filter_chains:
+  # Ollama and OpenAI together. Both speak Chat Completions at the same path and
+  # both report usage in the OpenAI shape, so one chain serves both; only the
+  # Host, the SNI and the endpoint differ, and those are per-cluster.
+  - name: openai-compatible
+    filters:
+      - filter: request_id
+      - filter: access_log
+
+      # Promotes the JSON body's `model` field onto X-Model, so the router and
+      # the budget rules can key on it without re-parsing the body.
+      - filter: model_to_header
+
+      # NOTE ON ORDER: token_usage_headers is declared BEFORE token_count
+      # because response hooks run in reverse declared order -- token_count's
+      # response-body phase must populate `token.*` metadata before
+      # token_usage_headers reads it.
+      # Reservation-based token budget admission (experimental: requires the
+      # `token-rate-limit-filter` cargo feature, on in this image).
+      #
+      # Reserves `reserved_tokens` before forwarding, then reconciles against
+      # the provider's reported usage once the response completes -- refunding
+      # an over-estimate or recording an overage.
+      #
+      # NOTE ON ORDER: like token_usage_headers, this must be declared BEFORE
+      # token_count. It reconciles against the `token.total` metadata that
+      # token_count writes in its response-body phase, and response hooks run
+      # in reverse declared order. Declared after token_count it would run
+      # first, find no metadata, and silently charge every request at its
+      # flat estimate -- the metrics would look plausible and be wrong.
+      #
+      # Spelled out although `memory` is already the default: this is the
+      # knob to change for a multi-replica deployment, where `valkey` shares
+      # one budget across every replica instead of one budget per process.
+      - filter: token_rate_limit
+        backend:
+          kind: memory
+        rules:
+          # Paying tier, matched on a header THE CALLER SENDS. token_rate_limit
+          # does not authenticate, and nothing here derives X-Tier from a signed
+          # claim, so any caller can put itself in this tier by setting the
+          # header. On your own machine that is harmless -- you are the only
+          # caller, and this is how scripts/rate-limit-demo.sh drives the two
+          # tiers. configs/server.yaml STRIPS the header for exactly this reason.
+          # A real tier needs trusted identity data; see grid#101.
+          - name: premium
+            match:
+              headers:
+                X-Tier: premium
+            algorithm: sliding_window
+            window: "1m"
+            capacity: 20000
+            reserved_tokens: 200
+
+          # A DAILY budget, not a per-minute rate limit -- same filter, longer
+          # window. Rules are evaluated in order, so these sit between the
+          # header-matched premium tier and the catch-all, and claim only the
+          # traffic aimed at a big local model.
+          #
+          # model_to_header promoted the body's "model" into X-Model, so this
+          # matches without the client sending anything extra -- which is what
+          # makes it usable from Codex, opencode or Claude Code, none of which
+          # let you set arbitrary headers.
+          #
+          # Sized from measurement, and the measurement is the point: a bare
+          # curl to qwen3.8:27b costs ~406 tokens, but one trivial CODEX turn
+          # through this gateway cost 9,471 -- the agent's system prompt and
+          # tool schemas dwarf the conversation. Budget for the harness, not
+          # for what you type. reserved_tokens: 1500 produced 7,971 tokens of
+          # overage across four turns before this was retuned.
+          #
+          # capacity 10,000,000/day is ~1,000 agent turns -- a full day of
+          # heavy use, not a demo allowance. Against a local model the budget
+          # protects the GPU queue rather than a bill, so size it for the work
+          # you actually do. `window` accepts ms/s/m/h only -- "24h" is a day,
+          # "168h" a week, and "7d" is rejected as an invalid duration.
+          - name: agent-daily
+            match:
+              headers:
+                X-Model: qwen3.8:27b
+            algorithm: sliding_window
+            window: "24h"
+            capacity: 10000000
+            reserved_tokens: 10000
+            # A 27B turn takes 34-78s; the default reservation_timeout is 30s, so
+            # without this the reservation is reaped as orphaned before the
+            # response lands and the request is charged the flat estimate.
+            reservation_timeout: "300s"
+          - name: agent-daily-qwen3-coder
+            match:
+              headers:
+                X-Model: qwen3-coder:30b
+            algorithm: sliding_window
+            window: "24h"
+            capacity: 10000000
+            reserved_tokens: 10000
+            reservation_timeout: "300s"
+          - name: agent-daily-deepseek-r1
+            match:
+              headers:
+                X-Model: deepseek-r1:32b
+            algorithm: sliding_window
+            window: "24h"
+            capacity: 10000000
+            reserved_tokens: 10000
+            reservation_timeout: "300s"
+
+          # The hosted models on this port get their own budgets, because these
+          # cost money rather than GPU time. One rule per model: match.headers
+          # is exact and there is no wildcard today -- see
+          # docs/2026-09-10-budget-model-switching.md in the workspace docs.
+          - name: gpt-4o
+            match:
+              headers:
+                X-Model: gpt-4o
+            algorithm: sliding_window
+            window: "1m"
+            capacity: 40000
+            reserved_tokens: 2000
+            reservation_timeout: "120s"
+          - name: gpt-4o-mini
+            match:
+              headers:
+                X-Model: gpt-4o-mini
+            algorithm: sliding_window
+            window: "1m"
+            capacity: 40000
+            reserved_tokens: 1000
+            reservation_timeout: "120s"
+
+          # Catch-all: the trailing match-less rule. Without one, requests
+          # matching no rule are not rate limited at all.
+          - name: free
+            algorithm: sliding_window
+            window: "1m"
+            capacity: 5000
+            reserved_tokens: 200
+
+      # Note: for every provider supported today, token_count extracts usage
+      # in on_response_body, which runs AFTER response headers have gone
+      # downstream -- so the Praxis-Token-* headers are not actually emitted
+      # on the wire yet. Kept because the metadata it depends on is what
+      # token_rate_limit reconciles against.
+      - filter: token_usage_headers
+
+      # One `provider:` for the whole chain, which is exactly why Anthropic is
+      # not on this port. Ollama's /v1 surface is OpenAI-shaped, so this parser
+      # serves both clusters here. Verified: Ollama reports `usage` in
+      # non-streaming responses, and in streaming responses when the request
+      # sets `stream_options: {"include_usage": true}`.
+      - filter: token_count
+        provider: openai
+
+      # Records praxis_ai_ttft_seconds on the first body chunk of a streaming
+      # response. Only fires for successful text/event-stream replies, so a
+      # plain curl never produces a sample -- coding agents, which stream, do.
+      # Without an upstream format filter the `model` label is "unknown"; the
+      # dashboard aggregates across it rather than pretending otherwise.
+      - filter: time_to_first_token
+
+      # THE PROVIDER CHOICE. Routes are tried in order and `headers` is an exact,
+      # case-sensitive match, so every hosted model you want must be named here.
+      #
+      # A model that matches nothing falls through to the last route and goes to
+      # OLLAMA. That is deliberate: an unknown name then fails locally, for free,
+      # with Ollama's own "model not found" -- rather than being billed to a
+      # hosted provider because of a typo. Add a route per model you want hosted.
+      - filter: router
+        routes:
+          - path_prefix: "/"
+            headers:
+              X-Model: gpt-4o
+            cluster: openai
+          - path_prefix: "/"
+            headers:
+              X-Model: gpt-4o-mini
+            cluster: openai
+          # Default. No `headers`, so it matches anything the rules above did not.
+          - path_prefix: "/"
+            cluster: ollama
+
+      # Everything that differs between the two providers lives here, per cluster.
+      #
+      # `http.authority` is what sends the right upstream Host. It replaces a
+      # `headers` filter setting Host, which could not work on a shared chain:
+      # that filter takes no conditions, so it would stamp one Host onto both
+      # clusters. Get this wrong for a hosted provider and Cloudflare answers 403.
+      # SNI is independent and set separately.
+      # Attach the key on the way out, so your agent never holds one. Keyed by the
+      # cluster the router just chose; a cluster with no entry here is left
+      # untouched. It MUST run after the router -- placed before, it silently
+      # injects nothing and the provider reports a missing key.
+      #
+      # env_var is resolved at construction, so an ABSENT variable is fatal while
+      # an EMPTY one is fine. Pass `-e VAR="${VAR:-}"` and a provider you have no
+      # key for just answers its own 401 rather than stopping the gateway.
+      - filter: credential_injection
+        clusters:
+          # Ollama is deliberately absent: it needs no key, and omitting it
+          # lets the client's own header through untouched.
+          - name: openai
+            header: Authorization
+            header_prefix: "Bearer "
+            env_var: OPENAI_API_KEY
+
+      - filter: load_balancer
+        clusters:
+          - name: ollama
+            # No `tls:` block means plaintext HTTP, which is what Ollama serves.
+            # No authority either: Ollama does not care, and forwarding the
+            # client's own Host is harmless for a loopback service.
+            endpoints: ["host.docker.internal:11434"]
+          - name: openai
+            endpoints: ["api.openai.com:443"]
+            http:
+              authority: "api.openai.com"
+            tls:
+              sni: "api.openai.com"
+
+  # Anthropic needs its own chain: its /v1/messages body is not Chat Completions,
+  # and `token_count` needs provider: anthropic to read its usage shape.
+  - name: anthropic
+    filters:
+      - filter: request_id
+      - filter: access_log
+
+      # Anthropic's body carries `model` in the same place OpenAI's does, so
+      # this promotes it onto X-Model for the budget rules either way.
+      - filter: model_to_header
+
+      - filter: token_rate_limit
+        rules:
+          # One rule per model, because match.headers is an exact match and
+          # there is no wildcard today -- see
+          # docs/2026-09-10-budget-model-switching.md in the workspace docs.
+          #
+          # Claude Code is the obvious client here, and it does NOT use one
+          # model: subagents, background tasks and the built-in Explore and
+          # Plan agents each resolve their own. Expect two to four distinct
+          # strings from a single session, so give each a rule or let the
+          # catch-all cover the rest. See docs/coding-agents.md.
+          - name: sonnet
+            match:
+              headers:
+                X-Model: claude-sonnet-4-6
+            algorithm: sliding_window
+            window: "1m"
+            capacity: 40000
+            reserved_tokens: 2000
+            reservation_timeout: "120s"
+          - name: haiku
+            match:
+              headers:
+                X-Model: claude-haiku-4-5
+            algorithm: sliding_window
+            window: "1m"
+            capacity: 40000
+            reserved_tokens: 1000
+            reservation_timeout: "120s"
+          # Catch-all. Without a match-less rule, anything unmatched is not
+          # limited at all -- which against a paid API is the expensive default.
+          - name: free
+            algorithm: sliding_window
+            window: "1m"
+            capacity: 10000
+            reserved_tokens: 1000
+            reservation_timeout: "120s"
+
+      # Normalises the anthropic-version / anthropic-beta headers for a native
+      # /v1/messages backend. It touches no body and no credentials, so it is
+      # here to make a client that omits the version header still work.
+      - filter: anthropic_messages_protocol
+
+      - filter: token_usage_headers
+      - filter: token_count
+        provider: anthropic
+      - filter: time_to_first_token
+
+      - filter: router
+        routes:
+          - path_prefix: "/"
+            cluster: anthropic
+
+      # Attach the key on the way out, so your agent never holds one. Keyed by the
+      # cluster the router just chose; a cluster with no entry here is left
+      # untouched. It MUST run after the router -- placed before, it silently
+      # injects nothing and the provider reports a missing key.
+      #
+      # env_var is resolved at construction, so an ABSENT variable is fatal while
+      # an EMPTY one is fine. Pass `-e VAR="${VAR:-}"` and a provider you have no
+      # key for just answers its own 401 rather than stopping the gateway.
+      - filter: credential_injection
+        clusters:
+          # Anthropic authenticates with x-api-key and no prefix, not Bearer.
+          - name: anthropic
+            header: x-api-key
+            env_var: ANTHROPIC_API_KEY
+
+      # Anthropic authenticates with x-api-key, so credential_injection above
+      # OVERWRITES nothing in Authorization -- whatever the caller sent would be
+      # forwarded to Anthropic as-is. On this file that leaks the caller's own key
+      # for some OTHER provider; on configs/server.yaml it would leak their gateway
+      # JWT to a third party. Remove it explicitly.
+      - filter: headers
+        request_remove: ["Authorization"]
+
+      - filter: load_balancer
+        clusters:
+          - name: anthropic
+            endpoints: ["api.anthropic.com:443"]
+            http:
+              authority: "api.anthropic.com"
+            tls:
+              sni: "api.anthropic.com"
+
+  # OpenRouter needs its own chain for one reason only: it serves the OpenAI API
+  # under /api/v1, and path_rewrite has no match clause. On a shared chain the
+  # "/api" prefix would be prepended to OpenAI's requests too.
+  - name: openrouter
+    filters:
+      - filter: request_id
+      - filter: access_log
+      - filter: model_to_header
+
+      - filter: token_rate_limit
+        rules:
+          - name: gpt-4o
+            match:
+              headers:
+                X-Model: openai/gpt-4o
+            algorithm: sliding_window
+            window: "1m"
+            capacity: 40000
+            reserved_tokens: 2000
+            reservation_timeout: "120s"
+          - name: free
+            algorithm: sliding_window
+            window: "1m"
+            capacity: 10000
+            reserved_tokens: 1000
+            reservation_timeout: "120s"
+
+      - filter: token_usage_headers
+      # OpenRouter serves the OpenAI API, so the OpenAI usage parser applies.
+      - filter: token_count
+        provider: openai
+      - filter: time_to_first_token
+
+      # Clients send /v1/chat/completions; OpenRouter serves it at
+      # /api/v1/chat/completions. Query strings are preserved.
+      - filter: path_rewrite
+        add_prefix: "/api"
+
+      - filter: router
+        routes:
+          - path_prefix: "/"
+            cluster: openrouter
+
+      # Attach the key on the way out, so your agent never holds one. Keyed by the
+      # cluster the router just chose; a cluster with no entry here is left
+      # untouched. It MUST run after the router -- placed before, it silently
+      # injects nothing and the provider reports a missing key.
+      #
+      # env_var is resolved at construction, so an ABSENT variable is fatal while
+      # an EMPTY one is fine. Pass `-e VAR="${VAR:-}"` and a provider you have no
+      # key for just answers its own 401 rather than stopping the gateway.
+      - filter: credential_injection
+        clusters:
+          - name: openrouter
+            header: Authorization
+            header_prefix: "Bearer "
+            env_var: OPENROUTER_API_KEY
+
+      - filter: load_balancer
+        clusters:
+          - name: openrouter
+            endpoints: ["openrouter.ai:443"]
+            http:
+              authority: "openrouter.ai"
+            tls:
+              sni: "openrouter.ai"

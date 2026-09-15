@@ -3,7 +3,7 @@
 # Drive the gateway hard enough that the free tier's token budget is genuinely
 # reached, then show the premium tier absorbing the same load.
 #
-# The budgets in configs/token-budget.yaml are sized for this to be a real
+# The budgets in configs/laptop.yaml are sized for this to be a real
 # limit rather than a trick: the free tier's 5,000 tokens/min is reached by
 # ordinary traffic, the way a production "protect the GPU" limit would be.
 set -euo pipefail

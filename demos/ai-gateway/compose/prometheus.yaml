@@ -1,0 +1,19 @@
+# The compose equivalent of the KIND target's ServiceMonitor.
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  # Named to match the job label the Prometheus Operator derives from
+  # manifests/servicemonitor.yaml on the KIND target, so a query written against
+  # one target works unchanged against the other.
+  - job_name: praxis-proxy
+    static_configs:
+      - targets: ["praxis:9901"]
+  - job_name: tempo
+    static_configs:
+      - targets: ["tempo:3200"]
+  # Same job name as the KIND target, so the collector-health panels of the
+  # shared dashboards resolve on both.
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8888"]

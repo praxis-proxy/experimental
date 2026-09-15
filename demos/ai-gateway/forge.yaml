@@ -13,21 +13,39 @@ spec:
     - name: local
       # Deliberately offset from the otel-benchmark demo's ports so both
       # clusters can run side by side on one machine.
+      # bindAddress on every mapping: without it KIND publishes on 0.0.0.0 and
+      # an unauthenticated gateway plus a mutable admin API reach your network.
       ports:
         - host: 38080
-          container: 30080    # Praxis proxy
+          container: 30080    # Praxis :8080 -- Ollama + OpenAI
+          bindAddress: "127.0.0.1"
+        - host: 38081
+          container: 30081    # Praxis :8081 -- Anthropic
+          bindAddress: "127.0.0.1"
+        - host: 38082
+          container: 30082    # Praxis :8082 -- OpenRouter
+          bindAddress: "127.0.0.1"
         - host: 38901
           container: 30901    # Praxis admin/metrics
+          bindAddress: "127.0.0.1"
         - host: 33000
           container: 30300    # Grafana
+          bindAddress: "127.0.0.1"
         - host: 39090
           container: 30909    # Prometheus
+          bindAddress: "127.0.0.1"
+        # 33001 keeps Perses beside Grafana in the UI range, well away from the
+        # gateway ports so an agent pointed at one never gets a dashboard.
+        - host: 33001
+          container: 30091    # Perses
+          bindAddress: "127.0.0.1"
       stacks:
         - prometheus
         - tempo
         - otel-collector
         - praxis-deploy
         - dashboards
+        - perses
       properties:
         # Pin chart versions for reproducibility
         kubePrometheusVersion: "72.6.3"
@@ -163,10 +181,10 @@ spec:
           timeout: "60s"
 
     praxis-deploy:
-      description: Deploy Praxis pointed at the host's Ollama
+      description: Deploy Praxis with configs/laptop.yaml -- every provider, one file
       steps:
         - type: exec
-          command: [bash, -c, "kubectl --context kind-ai-gw-local create configmap praxis-config --from-file=praxis.yaml=configs/token-budget.yaml -n default --dry-run=client -o yaml | kubectl --context kind-ai-gw-local apply -f -"]
+          command: [bash, -c, "kubectl --context kind-ai-gw-local create configmap praxis-config --from-file=praxis.yaml=configs/laptop.yaml -n default --dry-run=client -o yaml | kubectl --context kind-ai-gw-local apply -f -"]
         - type: manifest
           path: manifests/praxis.yaml
         - type: manifest
@@ -184,3 +202,25 @@ spec:
           command: [bash, -c, "kubectl --context kind-ai-gw-local -n monitoring create configmap praxis-dashboards --from-file=stacks/observability/dashboards/ --dry-run=client -o yaml | kubectl --context kind-ai-gw-local apply -f -"]
         - type: exec
           command: [kubectl, --context, kind-ai-gw-local, -n, monitoring, label, configmap, praxis-dashboards, grafana_dashboard=1, --overwrite]
+
+    perses:
+      description: Perses reading the same dashboards as the compose target
+      steps:
+        # Four ConfigMaps rather than one: the project and dashboards are shared
+        # with the compose target byte-for-byte, while the datasource URLs are
+        # KIND's own -- which is the only thing that differs between targets.
+        - type: exec
+          command: [bash, -c, "kubectl --context kind-ai-gw-local -n monitoring create configmap perses-config --from-file=observability/perses/config.yaml --dry-run=client -o yaml | kubectl --context kind-ai-gw-local apply -f -"]
+        - type: exec
+          command: [bash, -c, "kubectl --context kind-ai-gw-local -n monitoring create configmap perses-project --from-file=observability/perses/project.json --dry-run=client -o yaml | kubectl --context kind-ai-gw-local apply -f -"]
+        - type: exec
+          command: [bash, -c, "kubectl --context kind-ai-gw-local -n monitoring create configmap perses-dashboards --from-file=observability/perses/dashboards/ --dry-run=client -o yaml | kubectl --context kind-ai-gw-local apply -f -"]
+        - type: exec
+          command: [bash, -c, "kubectl --context kind-ai-gw-local -n monitoring create configmap perses-datasources --from-file=observability/perses/datasources/kind/ --dry-run=client -o yaml | kubectl --context kind-ai-gw-local apply -f -"]
+        - type: manifest
+          path: manifests/perses.yaml
+        - type: wait
+          resource: deployment/perses
+          namespace: monitoring
+          condition: available
+          timeout: "120s"

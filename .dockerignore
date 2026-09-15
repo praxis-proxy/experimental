@@ -6,6 +6,16 @@ target/
 .git/
 .github/
 demos/
+# ...except the demo assets the runtime image carries; see the Containerfile.
+!demos/ai-gateway/configs
+!demos/ai-gateway/compose/compose.quick.yaml
+!demos/ai-gateway/compose/tempo.yaml
+!demos/ai-gateway/compose/prometheus.yaml
+!demos/ai-gateway/compose/otel-collector.yaml
+!demos/ai-gateway/observability/perses
+# Never a developer's own key or state, whatever the rules above re-include.
+demos/**/.env
+demos/**/.demo-*
 docs/
 examples/
 hack/

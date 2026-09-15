@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# The AI gateway demo on a KIND cluster, driven by forge.
+#
+#   ./demo-kind up                create the cluster and deploy
+#   ./demo-kind verify            run the checks
+#   ./demo-kind urls              print the dashboard links
+#   ./demo-kind down              delete the cluster
+#   ./demo-kind forget openai     delete a stored key
+#
+# No provider argument: the deployment runs configs/laptop.yaml, which serves
+# every provider from one file. See docs/kind.md for these steps run by hand.
+set -euo pipefail
+
+cd "$(dirname "$0")"
+DEMO_CMD="./demo-kind"
+# shellcheck source=scripts/demo-lib.sh
+. scripts/demo-lib.sh
+
+CLUSTER="ai-gw-local"
+DEPLOY_IMAGE="praxis-experimental:ai-gw"
+STACKS="prometheus tempo otel-collector praxis-deploy dashboards perses"
+
+# Fixed by extraPortMappings in forge.yaml, which KIND applies when the node
+# container is created. Changing them needs a down and up.
+GW_PORT=38080
+ANTHROPIC=38081
+OPENROUTER=38082
+ADMIN=38901
+PERSES=33001
+PROM=39090
+GRAFANA=33000
+
+# Every provider variable becomes a key in the gateway Secret. Empty values are
+# intentional: credential_injection requires the variables to exist, and a
+# provider without a credential then returns its own authentication error.
+apply_secret() {
+  local -a args=()
+  local var
+  for var in $(provider_key_vars); do
+    args+=(--from-literal="${var}=${!var:-}")
+  done
+  kubectl create secret generic praxis-provider-keys "${args[@]}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+}
+
+up() {
+  local s
+  command -v praxis-forge > /dev/null 2>&1 \
+    || die "praxis-forge not found. Install it with: cargo install --locked --git https://github.com/praxis-proxy/forge"
+  # KIND loads from docker specifically; forge.yaml sets runtime.provider: docker.
+  ensure_image docker
+  ensure_ollama
+
+  say "creating the cluster -- about three minutes, mostly Helm"
+  praxis-forge up --config forge.yaml
+  # manifests/praxis.yaml names the image literally, so a PRAXIS_IMAGE override
+  # has to be tagged to that name before it is loaded into the node.
+  if [ "${IMAGE}" != "${DEPLOY_IMAGE}" ]; then
+    docker tag "${IMAGE}" "${DEPLOY_IMAGE}"
+  fi
+  kind load docker-image "${DEPLOY_IMAGE}" --name "${CLUSTER}"
+  kubectl config use-context "kind-${CLUSTER}"
+  apply_secret
+
+  for s in ${STACKS}; do
+    praxis-forge apply --config forge.yaml local "${s}"
+  done
+
+  print_urls "${GW_PORT}" "${ANTHROPIC}" "${OPENROUTER}" \
+    "${ADMIN}" "${PERSES}" "${PROM}" "${GRAFANA}"
+}
+
+down() {
+  say "deleting the cluster"
+  praxis-forge down --config forge.yaml
+}
+
+usage() {
+  cat <<'USAGE'
+Usage: ./demo-kind <command>
+
+  up                  create the cluster and deploy
+  verify              run the checks
+  urls                print the dashboard links
+  down                delete the cluster
+  remember <provider> store a provider key, for your own hosted calls
+  forget <provider>   delete a stored key
+
+The gateway runs configs/laptop.yaml: one config, every provider. Hosted-provider
+variables may be empty; Ollama needs no provider credential.
+USAGE
+}
+
+cmd="${1:-}"
+shift || true
+
+case "${cmd}" in
+  remember)
+    [ -n "${1:-}" ] || die "which provider? e.g. ./demo-kind remember openai"
+    remember_key "$1"
+    exit 0
+    ;;
+  forget)
+    [ -n "${1:-}" ] || die "which provider? e.g. ./demo-kind forget openai"
+    var="$(key_var_for "$1")" || die "unknown provider '$1'. Known: $(provider_names)"
+    forget_key "${var}"
+    exit 0
+    ;;
+esac
+
+resolve_mode
+
+case "${cmd}" in
+  up) up ;;
+  # Tempo publishes no host port here, so the trace check is skipped; the
+  # traces dashboard shows them instead.
+  verify) run_verify "${GW_PORT}" "${PROM}" ;;
+  urls) print_urls "${GW_PORT}" "${ANTHROPIC}" "${OPENROUTER}" \
+    "${ADMIN}" "${PERSES}" "${PROM}" "${GRAFANA}" ;;
+  down) down ;;
+  '' | -h | --help | help) usage ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac

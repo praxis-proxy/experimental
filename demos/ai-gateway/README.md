@@ -1,307 +1,146 @@
-# AI Gateway: real models, token budgets, span-derived dashboards
+# AI Gateway demo
 
-Praxis in front of a **real local model** (Ollama), enforcing **token budgets**,
-with Grafana dashboards built from Prometheus counters *and* Tempo span metrics
-— including per-filter latency, which a trace waterfall can only show one
-request at a time.
+A Praxis AI gateway in front of a real model, enforcing per-tier token budgets,
+with dashboards built from its own traces. Point a coding agent at it and watch
+the requests land.
 
-Runs on its own KIND cluster with ports offset from
-[../otel-benchmark](../otel-benchmark), so both demos can be up at once.
+## Quickstart
 
-| Demo | Question it answers |
-| --- | --- |
-| `otel-benchmark` | What does OTel tracing cost? |
-| `ai-gateway` (this one) | What does a real AI gateway do, and which filter costs what? |
+**[docs/quickstart.md](docs/quickstart.md)** — two paths, picked by who can reach
+the port. Three ports serve every provider:
 
-## Prerequisites
-
-Docker or Podman, [KIND](https://kind.sigs.k8s.io/), [Helm](https://helm.sh/),
-`python3`, the [Praxis Forge CLI](https://github.com/praxis-proxy/forge)
-(`cargo install --locked --git https://github.com/praxis-proxy/forge`), and
-[Ollama](https://ollama.com) **0.33+** — older versions fail with
-`412: requires a newer version of Ollama`.
-
-```bash
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo add grafana https://grafana.github.io/helm-charts && helm repo update
-ollama pull qwen3.8:27b     # agent work, and the model the budget rules key on
-ollama pull qwen3.5:0.8b    # the rate-limit burst in step 4
-# optional — the other two models with an agent-daily budget:
-# ollama pull qwen3-coder:30b
-# ollama pull deepseek-r1:32b
-ollama serve                # leave running on its DEFAULT loopback binding
-```
-
-> **Leave Ollama on `127.0.0.1`.** A KIND pod reaches it via
-> `host.docker.internal`, which the container runtime proxies from the host
-> side. `OLLAMA_HOST=0.0.0.0` is unnecessary and publishes your models to the
-> local network. Apple Metal is not reachable from Linux containers, so the
-> model server stays native and only the gateway is containerized.
-
-## 1. Get the image
-
-Built locally today. Once praxis-proxy/experimental#22 merges and this PR lands,
-`ghcr.io/praxis-proxy/experimental:main` carries the same binary — then set that
-as the `image:` in `manifests/praxis.yaml` and skip the build and `kind load`.
-
-From the repository root:
-
-```bash
-docker build --build-arg FEATURES=otel -t praxis-experimental:ai-gw -f Containerfile .
-docker inspect --format '{{index .Config.Labels "io.praxis.build.features"}}' praxis-experimental:ai-gw
-```
-
-## 2. Bring it up
-
-```bash
-cd demos/ai-gateway
-praxis-forge up --config forge.yaml
-kind load docker-image praxis-experimental:ai-gw --name ai-gw-local
-kubectl config use-context kind-ai-gw-local
-for s in prometheus tempo otel-collector praxis-deploy dashboards; do
-  praxis-forge apply --config forge.yaml local "$s"
-done
-```
-
-> `use-context` matters if you also run `../otel-benchmark`. Forge scopes its
-> `manifest`, `helm` and `wait` steps to the cluster, but `exec` steps inherit
-> the ambient kubectl context.
-
-## 3. Verify
-
-```bash
-curl -s -o /dev/null -w 'gateway %{http_code}\n' http://localhost:38080/v1/models
-curl -s -o /dev/null -w 'grafana %{http_code}\n' http://localhost:33000/login
-
-curl -s http://localhost:38080/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"qwen3.8:27b","max_tokens":300,"messages":[{"role":"user","content":"say hi"}]}'
-```
-
-> `qwen3.8` is a **reasoning** model: it returns a separate `reasoning` field and
-> those tokens count toward `completion_tokens`. With a small `max_tokens` the
-> whole budget goes to reasoning and `content` comes back empty. That is not a
-> failure — use `max_tokens: 300` or more.
-
-## 4. Hit a real rate limit
-
-```bash
-bash scripts/rate-limit-demo.sh
-```
-
-Sends 100 requests as `free`, waits for the sliding window to age out, then the
-same 100 as `premium`:
-
-```text
-  100 requests as tier: free
-  200 OK            53
-  429 rate limited  47
-
-  100 requests as tier: premium
-  200 OK           100
-  429 rate limited   0
-```
-
-The 429 carries `Retry-After` and `X-RateLimit-{Limit,Remaining,Reset}-Tokens`,
-and is decided at *admission* — before the upstream call — so a denied request
-costs no GPU time.
-
-> **Why a small model here.** The burst has to land inside the 1m window.
-> `qwen3.5:0.8b` answers in ~0.3s; `qwen3.8:27b` takes 74-78s under concurrency,
-> so the budget would age out faster than it was consumed.
-
-## 5. The budget rules
-
-`configs/token-budget.yaml`, evaluated in order, first match wins:
-
-| Rule | Match | Budget |
+| Port | Serves | Pick it by |
 | --- | --- | --- |
-| `premium` | `X-Tier: premium` | 20,000 tokens/**min** |
-| `agent-daily`* | `X-Model: qwen3.8:27b` | 10,000,000 tokens/**day** |
-| `free` | catch-all | 5,000 tokens/**min** |
+| `:8080` | **Ollama and OpenAI** | the model you name |
+| `:8081` | Anthropic | pointing at the port |
+| `:8082` | OpenRouter | pointing at the port |
 
-\* plus identical rules for `qwen3-coder:30b` and `deepseek-r1:32b`. Rules match
-one exact header value each, so a model needs its own rule to get an agent
-budget; the two small models are deliberately left on the `free` tier.
-
-`agent-daily` is the same filter with a longer window — that is all a "total
-budget" is here. `window` takes `ms`/`s`/`m`/`h`: a day is `"24h"`, a week
-`"168h"`. **`"7d"` is rejected**; praxis logs `invalid duration '7d'`, refuses
-the reload and keeps running on the previous config.
-
-It matches `X-Model`, which `model_to_header` promotes from the request body, so
-it applies to Codex, opencode and Claude Code without any of them sending a
-custom header — none of them let you.
-
-**Size reservations from the harness, not from what you type.** A bare `curl`
-costs ~406 tokens; one trivial Codex turn cost **9,471**, because system prompts
-and tool schemas dominate. At `reserved_tokens: 1500` that recorded 7,971 tokens
-of overage over four turns; at 10,000 a turn settles as
-`estimated 10000 / actual 9435 / refunded 565 / overage 0`.
-
-> `token_rate_limit` does **not** authenticate. A header-matched rule trusts
-> whatever reached it, so a real deployment needs an auth filter to set the tier
-> header and strip client copies. Tracked at grid#101.
-
-## 6. Point a coding agent at it
-
-**Codex** — add the provider (safe to re-run):
+On your laptop, provider credentials are optional. The gateway variables must exist,
+but empty values are enough for Ollama and keep real keys out of coding agents:
 
 ```bash
-mkdir -p ~/.codex
-grep -q '^\[model_providers.praxis\]' ~/.codex/config.toml 2>/dev/null \
-  || cat >> ~/.codex/config.toml <<'EOF'
-
-[model_providers.praxis]
-name = "Praxis to local Ollama"
-base_url = "http://localhost:38080/v1"
-wire_api = "responses"
-env_key = "OPENAI_API_KEY"
-EOF
+podman run -d --name praxis \
+  -p 127.0.0.1:8080:8080 -p 127.0.0.1:8081:8081 \
+  -p 127.0.0.1:8082:8082 -p 127.0.0.1:9901:9901 \
+  -e OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
+  -e ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
+  -e OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" \
+  ghcr.io/praxis-proxy/experimental:main \
+  -c /usr/share/praxis/demo/configs/laptop.yaml
 ```
 
-```bash
-OPENAI_API_KEY=dummy codex -c model_provider=praxis --model qwen3.8:27b
-```
+`:8080` carries two providers at once because everything that differs between them
+has a per-cluster form — the upstream `Host` (`http.authority`), the SNI, the key,
+and which cluster a model name selects. Anthropic and OpenRouter need their own
+ports for reasons `configs/laptop.yaml` spells out at the top: a single
+`token_count provider:` per chain, no `openai_to_anthropic` translation filter,
+and an unconditional `path_rewrite`.
 
-`OPENAI_BASE_URL` alone does **not** redirect Codex — it reads the endpoint from
-the provider block and the key from `~/.codex/auth.json`, so without
-`-c model_provider=...` you silently hit api.openai.com and get a 404 for a
-model OpenAI has never heard of. `wire_api` must be `"responses"`; Codex 0.153+
-rejects `"chat"`. Do not name a provider `ollama`, `lmstudio` or `openai` —
-those are reserved built-in IDs and Codex refuses to start.
+Both configs make the gateway hold provider keys. On a laptop any placeholder
+is accepted because loopback is the trust boundary. On a server, `policy` first
+validates that bearer value as a caller JWT. The quickstart explains why
+`basic_auth` is not a fit and why `ip_acl` is only an optional perimeter.
 
-**opencode** — writes the provider and preselects it, so opencode opens ready
-to use. It consolidates into whichever config file already exists; having both
-`opencode.json` and `opencode.jsonc` is ambiguous and makes providers silently
-fail to appear.
+## Providers
 
-> Unlike the Codex block this **rewrites** the target file: it re-serialises it
-> as plain JSON, so comments in a `.jsonc` are lost, and it deletes the other
-> file once merged. Back up an existing config first.
+There are **two configs**, one per deployment target, and each serves every
+provider:
 
-```bash
-python3 - <<'EOF'
-import json, pathlib
-d = pathlib.Path.home() / ".config" / "opencode"
-d.mkdir(parents=True, exist_ok=True)
-jsonc, plain = d / "opencode.jsonc", d / "opencode.json"
-target = jsonc if jsonc.exists() else plain
-cfg = {}
-for f in (plain, jsonc):
-    if f.exists() and f.read_text().strip():
-        try: cfg.update(json.loads(f.read_text()))
-        except ValueError: pass
-models = {m: {"name": m} for m in ["qwen3.8:27b", "qwen3-coder:30b", "deepseek-r1:32b"]}
-cfg["$schema"] = "https://opencode.ai/config.json"
-cfg.setdefault("provider", {})["praxis-local"] = {
-    "npm": "@ai-sdk/openai-compatible",
-    "options": {"baseURL": "http://localhost:38080/v1"}, "models": models}
-cfg["model"] = cfg["small_model"] = "praxis-local/qwen3.8:27b"
-target.write_text(json.dumps(cfg, indent=2) + "\n")
-for f in (plain, jsonc):
-    if f != target and f.exists(): f.unlink()
-print("wrote", target, "| model:", cfg["model"])
-EOF
-```
-
-```bash
-OPENAI_API_KEY=dummy opencode run --model praxis-local/qwen3.8:27b "reply with exactly: PRAXIS_OK"
-```
-
-> **Use a big model.** One agent turn costs ~9,000 tokens, and only
-> `qwen3.8:27b`, `qwen3-coder:30b` and `deepseek-r1:32b` carry an `agent-daily`
-> budget. `qwen3.5:0.8b` and `qwen2.5:3b` fall through to the catch-all `free`
-> tier at 5,000 tokens/min and are **429'd on the first turn** — they exist for
-> the burst demo, not for agents.
-
-Confirm the traffic actually reached the gateway — an agent that "works" may
-just be talking to the vendor:
-
-```bash
-kubectl exec deploy/praxis-proxy -n default -- \
-  wget -qO- http://127.0.0.1:9901/metrics | grep 'requests_total{decision='
-```
-
-`admitted` climbing means praxis served it; `denied` climbing means praxis saw
-it and rejected it on budget; neither moving means the agent never arrived.
-
-## 7. Dashboards
-
-<http://localhost:33000> — admin/admin. Every panel carries an `i` tooltip
-explaining what it plots and how to read it.
-
-| Dashboard | Shows |
-| --- | --- |
-| Praxis AI Gateway Overview | both tiers, traffic and latency together |
-| Praxis Token Budget & Rate Limiting | admitted/denied, estimation accuracy, reservations |
-| Praxis Filter Latency (from spans) | which filter costs what |
-| Praxis OTel Traces | per-request waterfall, and whether spans are being lost |
-
-**Two telemetry planes.** Prometheus counters cover **100%** of requests and are
-unaffected by sampling; span metrics come only from **sampled** traces. Random
-sampling is unbiased for percentiles but not for counts, so Prometheus owns
-"how much" and span metrics own "how long and where". The Weighted Filter Cost
-panel takes its quantile from spans and its rate from
-`praxis_http_requests_total` for exactly that reason. This demo sets
-`sampling_rate: 1.0`, so the Sampling Ratio Cross-Check should read ~1.0; a drop
-means spans are being lost, not sampled.
-
-**Where token numbers come from.** `praxis_ai_token_rate_limit_tokens_total`
-with `kind=estimated|actual|refunded|overage`. `estimated` is reserved up front,
-`actual` is what the model reported, and the difference settles as `refunded` or
-`overage`. **If `actual` exactly equals `estimated`, reconciliation is not
-running** — see the ordering note in `configs/token-budget.yaml`.
-
-## 8. Teardown
-
-```bash
-praxis-forge down --config forge.yaml
-```
-
-## Host ports
-
-| Port | Service | NodePort |
+| | | |
 | --- | --- | --- |
-| 38080 | Praxis proxy | 30080 |
-| 38901 | Praxis admin | 30901 |
-| 33000 | Grafana | 30300 |
-| 39090 | Prometheus | 30909 |
+| `configs/laptop.yaml` | your own machine | gateway variables may be empty; callers use placeholders |
+| `configs/server.yaml` | a shared host | the gateway holds the keys; callers present a JWT |
 
-## Troubleshooting
+| Provider | Port | Needs | Wire format |
+| --- | --- | --- | --- |
+| Ollama | `:8080` | Ollama running locally. No key, no cost | OpenAI |
+| OpenAI | `:8080` | `OPENAI_API_KEY` | OpenAI |
+| Anthropic | `:8081` | `ANTHROPIC_API_KEY` | Anthropic `/v1/messages` |
+| OpenRouter | `:8082` | `OPENROUTER_API_KEY` | OpenAI |
 
-| Symptom | Cause |
+Adding a provider means one route and one cluster in each config — `laptop.yaml`
+explains at the top which fields are per-cluster and which force a new chain.
+
+Anthropic is the odd one: it is not OpenAI-shaped and praxis does not translate,
+so the client has to speak Anthropic too. Claude Code does.
+
+## Developer manuals
+
+For changing configs, adding a provider, running the verification suite, or
+deploying to Kubernetes:
+
+| | Good for | Needs | |
+| --- | --- | --- | --- |
+| **podman**, or docker | editing and re-running quickly | ~1 GB | **[docs/podman.md](docs/podman.md)** |
+| **KIND** via forge | closest to a real deployment | ~4 GB | **[docs/kind.md](docs/kind.md)** |
+
+Both come down to two commands, and both can run at once because their ports
+differ:
+
+```bash
+./demo-podman up && ./demo-podman verify
+./demo-kind    up && ./demo-kind    verify
+```
+
+[docs/budgets.md](docs/budgets.md) explains the tiers, the reservations and
+refunds, how to size a cap that means something, and why the limit only trips
+under concurrent load.
+
+---
+
+<details>
+<summary>What is running, and why</summary>
+
+| Component | Why it is here |
 | --- | --- |
-| `404 model ... does not exist` | Codex bypassed praxis — missing `-c model_provider=...` |
-| `wire_api = "chat" is no longer supported` | set `wire_api = "responses"` |
-| `reserved built-in provider IDs` | you renamed the provider — `ollama`, `lmstudio` and `openai` cannot be redefined |
-| agent 429s immediately | small model on the `free` tier — use a model from step 5's table |
-| neither `admitted` nor `denied` moves | the agent never reached the gateway |
-| opencode does not list your provider | two config files — the block in step 6 consolidates them |
-| `000` from curl on 38080 | cluster down, or `praxis-forge apply` not run |
-| `invalid duration '7d'` | use `"168h"`; praxis kept the previous config |
-| dashboards flat | no traffic through praxis, or the Prometheus target is down |
-| 27B feels slow | ~34s per 400-token turn is normal on an M4 Max |
+| **praxis** | the gateway under test: budgets requests per tier, routes upstream, emits the traces |
+| **the model** | Ollama or a hosted API, so token counts and latencies are real rather than mocked |
+| **OTel collector** | what praxis exports spans to. Its own metrics drive the export-health panels, so removing it would blank them |
+| **Tempo** | stores traces, and its metrics generator derives the span metrics the latency dashboards query |
+| **Prometheus** | scrapes praxis and the collector, and receives Tempo's generated span metrics |
+| **Perses** | one UI for both metrics and traces, and the same dashboards work on OpenShift through the Cluster Observability Operator |
+| **Grafana** (KIND only) | the original dashboards, kept until the Perses ports are confirmed equivalent |
 
-## Security notes — this is a demo configuration
+</details>
 
-- **`allow_public_admin: true`** binds the admin listener to the pod IP so
-  Prometheus can scrape `/metrics`. That listener also serves `/api/log-level`
-  and `/api/kv`, so every pod in the cluster can change the gateway's log level.
-  Restrict `:9901` with a NetworkPolicy anywhere shared.
-- **`allow_private_endpoints: true`** disables SSRF hardening so the gateway can
-  reach `host.docker.internal`. Drop it the moment the upstream is public.
-- **`X-Tier` and `X-Model` are trusted as-is** — see the auth note in step 5.
+<details>
+<summary>Resources it needs</summary>
 
-## Notes
+Measured on this stack, idle after a demo run:
 
-- `token_rate_limit` is experimental, behind the `token-rate-limit-filter` cargo
-  feature; its parent proposal is not accepted (ai#796) and the config surface
-  may change.
-- `reserved_tokens` is a flat per-request estimate. Deriving it from request
-  metadata is deferred upstream (ai#121).
-- The `memory` backend is per-process, and a sliding window retains one entry
-  per request for the length of the window. `backend.kind: valkey` shares one
-  budget across replicas and moves that state out of process.
-- Span metrics take a scrape interval or two to appear; empty panels right after
-  deploy are expected.
+| | podman | KIND |
+| --- | --- | --- |
+| Memory | **~250 MB** across 5 containers | **~2.3 GB** for the node, 19 pods |
+| Largest | Tempo 114 MB, Prometheus 46 MB | the kube-prometheus-stack |
+| Images | ~850 MB pulled | the above plus the KIND node image |
+| Startup | seconds | ~3 minutes, mostly Helm |
+
+Give the container VM **2 GB** for podman and **6 GB** for KIND. Ollama runs on
+the host; the demo model is 0.5 GB, and the 27B model the coding-agent examples
+use wants about 20 GB.
+
+</details>
+
+<details>
+<summary>Where things live</summary>
+
+| Path | What it is |
+| --- | --- |
+| `compose/compose.quick.yaml` | the checkout-free stack, baked into the image as `/usr/share/praxis/demo/compose.yaml` |
+| `demo-podman`, `demo-docker`, `demo-kind` | the developer entry points; `demo-docker` is a wrapper |
+| `scripts/demo-lib.sh` | what they share: providers, credentials, image, links |
+| `configs/laptop.yaml`, `configs/server.yaml` | ready to use per deployment target, four providers over three ports |
+| `compose/` | the podman target: services, Tempo, Prometheus, Perses |
+| `forge.yaml`, `manifests/` | the KIND target: cluster, stacks, Kubernetes objects |
+| `observability/perses/` | Perses config, project, dashboards, per-target datasources |
+| `scripts/verify.sh` | the checks, for either target |
+
+</details>
+
+## This is a demo configuration
+
+Laptop mode has no caller authentication, and its container-internal admin endpoint
+binds all interfaces so a loopback-only host publish can reach it. SSRF guards are
+relaxed so the gateway can reach a model server on the host. Server mode
+validates a JWT and binds admin to loopback. Do not expose the laptop
+configuration to a network.

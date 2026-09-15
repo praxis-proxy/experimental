@@ -1,0 +1,28 @@
+# Demo configuration: no login, dashboards and datasources provisioned from
+# files on disk. The same dashboard bodies are what the Perses operator would
+# take as PersesDashboard resources on a cluster.
+security:
+  enable_auth: false
+
+database:
+  file:
+    folder: /perses
+    extension: yaml
+
+provisioning:
+  # Deliberately a subtree, not /etc/perses itself. Mounting a volume directly
+  # over /etc/perses hides the image's own plugins-archive, and Perses then
+  # rejects every resource with "schema not found for plugin TimeSeriesChart"
+  # while still starting and serving an empty dashboard list.
+  folders:
+    - /etc/perses/demo/provisioning
+
+frontend:
+  # Opt-in, and off by default. Without it every trace link in the TraceTable
+  # panels silently redirects to the home page, because /explore is the route
+  # that renders a single trace's waterfall. The key is `enable`, not `enabled`.
+  # Requires the Tempo and Prometheus explorer plugins, both of which ship in
+  # the default image.
+  explorer:
+    enable: true
+  information: "Praxis AI gateway demo"
