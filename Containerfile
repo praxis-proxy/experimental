@@ -20,11 +20,12 @@
 # Stage 1: Build
 # ------------------------------------------------------------------------------
 
-FROM registry.access.redhat.com/ubi9/ubi:9.8@sha256:25a147defd01e19674714f55d17538c8dbe55d8c305fa157ecc3f9c8977b05b6 AS builder
+FROM registry.access.redhat.com/ubi9/ubi:9.8@sha256:9295c5c688f487fa5cf27a734fa55ecd57aeb7dc0904ba537da4f42dfa1d0acb AS builder
 
 # No openssl-devel: the binary links rustls, so nothing in the graph builds
 # against system OpenSSL. Verified with ldd on the produced binary.
-RUN dnf install -y --nodocs --setopt=install_weak_deps=0 \
+RUN dnf upgrade -y --nodocs --setopt=install_weak_deps=0 \
+    && dnf install -y --nodocs --setopt=install_weak_deps=0 \
         gcc cmake make xz \
     && dnf clean all
 
@@ -130,7 +131,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
 # Stage 2: Runtime
 # ------------------------------------------------------------------------------
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8@sha256:7fbeae18dc9476399f565e68255f602a3374ea8614ba3d14843565131a13ff93
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8@sha256:7b8e25a1b56ca4d00219198f3b5b51a3e1693a5c4f5369c5e190d7d6cb3f980e
 
 # Re-declare in this stage: ARG scope does not cross FROM boundaries.
 ARG FEATURES=""
@@ -165,11 +166,14 @@ LABEL org.opencontainers.image.source="https://github.com/praxis-proxy/experimen
     io.openshift.tags="ai,gateway,llm,proxy" \
     io.openshift.expose-services="8080:http,9901:http"
 
-# No package installs: the pinned ubi-minimal already ships curl (which backs the
-# HEALTHCHECK below) and ca-certificates. Installing them explicitly is a no-op
-# that only costs three metadata fetches, and the digest pin means the base
-# cannot drop them without a deliberate bump -- re-check both if that bump happens.
-RUN mkdir -p /etc/praxis /licenses
+# Keep the base identity pinned while still consuming signed UBI security errata
+# released between digest refreshes.
+#
+# ubi-minimal already ships curl (which backs the HEALTHCHECK below) and
+# ca-certificates, so no additional runtime package is installed.
+RUN microdnf update -y --nodocs --setopt=install_weak_deps=0 \
+    && microdnf clean all \
+    && mkdir -p /etc/praxis /licenses
 
 COPY LICENSE /licenses/LICENSE
 
