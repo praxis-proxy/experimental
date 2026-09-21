@@ -11,7 +11,7 @@ screen capture. This recording covers the **mixed-algorithm** scenario:
 `gold-tier` (`sliding_window`) and `silver-tier` (`token_bucket`), matched by
 an `x-tier` header, per ai#789/praxis#551.
 
-**Watch:** `output/k8s-real-pods-token-rate-limit.mp4` (1920x1080, h264/aac,
+**Watch:** https://github.com/user-attachments/assets/4fc6f22a-a025-4379-8513-21ee0c6ab156 (1920x1080, h264/aac,
 ~143s)
 
 `slides/proof-agenda.html`'s palette/fonts were restyled to a generic,
@@ -248,7 +248,7 @@ is still open upstream.
 hard-require `OPENAI_API_KEY` (real OpenAI TTS + Whisper transcription).
 **No such key was available in this environment**, so:
 
-- `narration/narration.wav` was generated with a local, offline
+- The narration audio was generated with a local, offline
   substitute -- macOS `say -v Samantha`, converted to WAV via `ffmpeg` --
   instead of the toolkit's OpenAI TTS call.
 - `narration/narration.srt` caption timing is an **approximation**

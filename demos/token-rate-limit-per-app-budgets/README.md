@@ -122,8 +122,7 @@ questions from the routing-layer questions the other demo explores.
 <!-- markdownlint-disable-next-line MD034 -->
 https://github.com/user-attachments/assets/f8ee89ed-ab77-45c4-a31f-bb7c67a78ca0
 
-`recording/output/k8s-real-pods-token-rate-limit.mp4` (1920x1080, h264/aac,
-~143s) is a narrated recording of the mixed-algorithm scenario below,
+The recording (~143s) is a narrated recording of the mixed-algorithm scenario below,
 driven through `dashboard/` against a real Kubernetes (`kind`) deployment
 of the two-gateway + Valkey stack (`k8s/`, `deploy.sh`) -- every pod name,
 gateway log line, and per-request HTTP call shown is real, not simulated.
