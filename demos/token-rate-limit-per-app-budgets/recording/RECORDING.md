@@ -11,8 +11,8 @@ screen capture. This recording covers the **mixed-algorithm** scenario:
 `gold-tier` (`sliding_window`) and `silver-tier` (`token_bucket`), matched by
 an `x-tier` header, per ai#789/praxis#551.
 
-**Watch:** https://github.com/user-attachments/assets/f8ee89ed-ab77-45c4-a31f-bb7c67a78ca0 (1920x1080, h264/aac,
-~143s)
+**Watch:** [recording](https://github.com/user-attachments/assets/f8ee89ed-ab77-45c4-a31f-bb7c67a78ca0)
+(1920x1080, h264/aac, ~143s)
 
 `slides/proof-agenda.html`'s palette/fonts were restyled to a generic,
 non-branded look after this video was recorded, so the shipped clip's intro
