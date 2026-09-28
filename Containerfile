@@ -131,7 +131,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
 # Stage 2: Runtime
 # ------------------------------------------------------------------------------
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8@sha256:984df0a2b8d9011d419b0ad260b25f6b74b7ce69ab0595b75522e30f8849f27f
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8@sha256:beeada7dd17903dfb69fd5f6916c054720bf28a52daaa2f7a1910a1394244bd2
 
 # Re-declare in this stage: ARG scope does not cross FROM boundaries.
 ARG FEATURES=""
