@@ -39,7 +39,7 @@ pingora-core = { version = "0.10.0", package = "quixotic-plecostomus-core", feat
 # NVIDIA NeMo Switchyard (pre-alpha). Pinned exactly to v0.2.0.
 switchyard-libsy = "=0.2.0"
 switchyard-protocol = "=0.2.0"
-switchyard-translation = "=0.2.0"
+switchyard-translation = "=0.3.0"
 
 [dev-dependencies]
 praxis-tls.workspace = true
