@@ -3516,7 +3516,7 @@ dependencies = [
  "serde",
  "serde_json",
  "switchyard-libsy",
- "switchyard-protocol",
+ "switchyard-protocol 0.2.0",
  "switchyard-translation",
  "thiserror",
  "tokio",
@@ -4079,7 +4079,7 @@ dependencies = [
  "windows-sys 0.59.0",
  "x509-parser",
  "yaml_serde",
- "zstd 0.13.3",
+ "zstd 0.14.0",
 ]
 
 [[package]]
@@ -5432,25 +5432,28 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "switchyard-libsy"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85f12e1ffefa168604044ccf78535a34dcde38eb59653ac27465e44113cd848c"
+checksum = "0646b0891f703d91ba97492d1d0527a7fdeb7b0269c53757e7b9388953550c16"
 dependencies = [
  "async-trait",
  "futures",
+ "http 1.5.0",
  "jsonptr",
  "jsonschema 0.49.9",
  "opentelemetry",
  "parking_lot",
  "rand 0.10.3",
+ "regex",
  "serde",
  "serde_json",
- "switchyard-protocol",
+ "switchyard-protocol 0.3.0",
  "thiserror",
  "tokio",
  "tokio-stream",
  "tracing",
  "tracing-opentelemetry",
+ "uuid",
 ]
 
 [[package]]
@@ -5458,6 +5461,20 @@ name = "switchyard-protocol"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c8be18d2d2c600ba679651f9e31ec9eb9dff96060a078c39e50e42ccd4e2318"
+dependencies = [
+ "async-trait",
+ "futures",
+ "http 1.5.0",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "switchyard-protocol"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c49a9e7884e7f50669250463a58a21bc79084adb87ef03647cbe7ba5c3b22ee"
 dependencies = [
  "async-trait",
  "futures",
@@ -5477,7 +5494,7 @@ dependencies = [
  "futures",
  "serde",
  "serde_json",
- "switchyard-protocol",
+ "switchyard-protocol 0.2.0",
  "thiserror",
 ]
 
