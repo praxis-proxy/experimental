@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # switchyard_route local mock demo.
-# Optional: JUDGE_ENDPOINT, JUDGE_MODEL, FORCE_REBUILD=1
+# Optional: JUDGE_ENDPOINT, JUDGE_MODEL, FORCE_REBUILD=1, KEEP_SERVERS=1
 
 cd "$(dirname "$0")"
 
@@ -54,11 +54,13 @@ wait_for_gateway() {
 
 start_server() {
   local append=${1:-}
+  local log_filter="${RUST_LOG:-info}"
+  log_filter="${log_filter},praxis_experimental_filters=debug"
   if [[ "$append" == append ]]; then
-    RUST_LOG="${RUST_LOG:-info,praxis_experimental_filters=debug}" \
+    RUST_LOG="$log_filter" \
       "$SERVER_BIN" >> "$SERVER_LOG" 2>&1 &
   else
-    RUST_LOG="${RUST_LOG:-info,praxis_experimental_filters=debug}" \
+    RUST_LOG="$log_filter" \
       "$SERVER_BIN" > "$SERVER_LOG" 2>&1 &
   fi
   SERVER_PID=$!
@@ -107,6 +109,173 @@ render_config enabled
 pkill -f 'praxis-experimental-server' 2>/dev/null || true
 sleep 0.2
 start_server
+
+upstream_path_guard_smoke() {
+  local status
+  status=$(curl -sS -m 5 -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18092/v1/responses \
+    -H 'content-type: application/json' \
+    -d '{"model":"agent-default","input":"wrong upstream path"}')
+  [[ "$status" == 404 ]]
+  echo "upstream path guard: non-Chat path rejected with 404"
+}
+
+upstream_path_guard_smoke
+
+protocol_smoke() {
+  local responses anthropic
+  responses=$(curl -sS -m 60 -X POST http://127.0.0.1:18080/v1/responses \
+    -H 'content-type: application/json' \
+    -H 'x-switchyard-session-id: protocol-responses-weak' \
+    -d '{"model":"agent-default","input":"protocol smoke","max_output_tokens":8}')
+  python3 -c 'import json,sys; r=json.loads(sys.argv[1]); assert r["object"] == "response"; assert "served_by=weak-upstream" in r["output"][0]["content"][0]["text"]' "$responses"
+
+  anthropic=$(curl -sS -m 60 -X POST http://127.0.0.1:18080/v1/messages \
+    -H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' \
+    -H 'x-switchyard-session-id: protocol-anthropic-weak' \
+    -d '{"model":"agent-default","max_tokens":8,"messages":[{"role":"user","content":"protocol smoke"}]}')
+  python3 -c 'import json,sys; r=json.loads(sys.argv[1]); assert r["type"] == "message"; assert "served_by=weak-upstream" in r["content"][0]["text"]' "$anthropic"
+
+  echo "protocol smoke: Responses and Anthropic translated through Switchyard"
+}
+
+protocol_smoke
+
+translation_evidence_smoke() {
+  local before_judge before_upstream after_judge after_upstream response status
+  before_judge=$(grep -c '^\[judge\]' "$MOCKS_LOG" || true)
+  before_upstream=$(grep -Ec '^\[(weak|strong)-upstream\]' "$MOCKS_LOG" || true)
+  response=$(curl -sS -m 60 -w $'\n%{http_code}' -X POST http://127.0.0.1:18080/v1/responses \
+    -H 'content-type: application/json' \
+    -d '{"model":"agent-default","messages":[{"role":"user","content":"mismatched protocol"}]}')
+  status=${response##*$'\n'}
+  [[ "$status" =~ ^[45][0-9][0-9]$ ]]
+  after_judge=$(grep -c '^\[judge\]' "$MOCKS_LOG" || true)
+  after_upstream=$(grep -Ec '^\[(weak|strong)-upstream\]' "$MOCKS_LOG" || true)
+  [[ "$after_judge" == "$before_judge" ]]
+  [[ "$after_upstream" == "$before_upstream" ]]
+  echo "translation evidence smoke: mismatched Responses body reached neither judge nor upstream"
+}
+
+translation_evidence_smoke
+
+anthropic_lossy_feature_smoke() {
+  local response status
+  response=$(curl -sS -m 60 -w $'\n%{http_code}' -X POST http://127.0.0.1:18080/v1/messages \
+    -H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' \
+    -d '{"model":"agent-default","max_tokens":8,"thinking":{"type":"enabled","budget_tokens":1024},"messages":[{"role":"user","content":"do not drop this"}]}')
+  status=${response##*$'\n'}
+  [[ "$status" == 400 ]]
+  grep -q 'unsupported Anthropic Messages feature: thinking' <<<"$response"
+  echo "Anthropic lossy-feature smoke: thinking rejected before translation"
+}
+
+anthropic_lossy_feature_smoke
+
+strong_protocol_smoke() {
+  local responses anthropic
+  responses=$(curl -sS -m 60 -X POST http://127.0.0.1:18080/v1/responses \
+    -H 'content-type: application/json' \
+    -H 'x-switchyard-session-id: protocol-responses-strong' \
+    -d '{"model":"agent-default","input":"Reverse-engineer an undocumented legacy billing service with no harness.","max_output_tokens":8}')
+  python3 -c 'import json,sys; r=json.loads(sys.argv[1]); assert r["object"] == "response"; assert "served_by=strong-upstream" in r["output"][0]["content"][0]["text"]' "$responses"
+
+  anthropic=$(curl -sS -m 60 -X POST http://127.0.0.1:18080/v1/messages \
+    -H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' \
+    -H 'x-switchyard-session-id: protocol-anthropic-strong' \
+    -d '{"model":"agent-default","max_tokens":8,"messages":[{"role":"user","content":"Reverse-engineer an undocumented legacy billing service with no harness."}]}')
+  python3 -c 'import json,sys; r=json.loads(sys.argv[1]); assert r["type"] == "message"; assert "served_by=strong-upstream" in r["content"][0]["text"]' "$anthropic"
+
+  echo "strong protocol smoke: Responses and Anthropic routed to Strong"
+}
+
+strong_protocol_smoke
+
+stream_smoke() {
+  local responses anthropic
+  responses=$(curl -sS -m 60 -N -X POST http://127.0.0.1:18080/v1/responses \
+    -H 'content-type: application/json' \
+    -d '{"model":"agent-default","input":"stream smoke","max_output_tokens":8,"stream":true}')
+  grep -q 'response.output_text.delta' <<<"$responses"
+  grep -q 'response.completed' <<<"$responses"
+
+  anthropic=$(curl -sS -m 60 -N -X POST http://127.0.0.1:18080/v1/messages \
+    -H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' \
+    -d '{"model":"agent-default","max_tokens":8,"stream":true,"messages":[{"role":"user","content":"stream smoke"}]}')
+  grep -q 'event: message_start' <<<"$anthropic"
+  grep -q 'event: content_block_delta' <<<"$anthropic"
+  grep -q 'event: message_stop' <<<"$anthropic"
+  echo "stream smoke: Responses and Anthropic SSE translated through Switchyard"
+}
+
+fragmented_request() {
+  local endpoint=$1 first_marker=$2 final_marker=$3 payload=$4 extra_marker=${5:-}
+  local tmp pid found _i
+  local -a headers=(-H 'content-type: application/json')
+  if [[ "$endpoint" == /v1/messages ]]; then
+    headers+=(-H 'anthropic-version: 2023-06-01')
+  fi
+  tmp=$(mktemp)
+  curl -sS -m 10 -N -X POST "http://127.0.0.1:18080${endpoint}" \
+    "${headers[@]}" \
+    -d "$payload" > "$tmp" &
+  pid=$!
+  found=0
+  for _i in $(seq 1 100); do
+    if grep -q "$first_marker" "$tmp"; then
+      found=1
+      break
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.02
+  done
+  if [[ "$found" == 0 ]] && grep -q "$first_marker" "$tmp"; then
+    found=1
+  fi
+  curl -sS -m 5 -X POST http://127.0.0.1:18091/control/fragmented-stream/release >/dev/null
+  wait "$pid"
+  [[ "$found" == 1 ]]
+  grep -q "$final_marker" "$tmp"
+  if [[ -n "$extra_marker" ]]; then
+    grep -q "$extra_marker" "$tmp"
+  fi
+  rm -f "$tmp"
+}
+
+fragmented_stream_smoke() {
+  curl -sS -m 5 -X POST http://127.0.0.1:18091/control/fragmented-stream/on >/dev/null
+  fragmented_request /v1/responses response.output_text.delta response.completed \
+    '{"model":"agent-default","input":"fragmented stream smoke","max_output_tokens":8,"stream":true}'
+  fragmented_request /v1/messages 'event: message_start' 'event: message_stop' \
+    '{"model":"agent-default","max_tokens":8,"stream":true,"messages":[{"role":"user","content":"fragmented stream smoke"}]}' \
+    'event: content_block_delta'
+  curl -sS -m 5 -X POST http://127.0.0.1:18091/control/fragmented-stream/off >/dev/null
+  echo "fragmented stream smoke: separate upstream writes translated for Responses and Anthropic"
+}
+
+error_smoke() {
+  local responses anthropic status
+  curl -sS -m 5 -X POST http://127.0.0.1:18091/control/weak-upstream/down >/dev/null
+  responses=$(curl -sS -m 60 -w $'\n%{http_code}' -X POST http://127.0.0.1:18080/v1/responses \
+    -H 'content-type: application/json' -d '{"model":"agent-default","input":"error smoke"}')
+  status=${responses##*$'\n'}
+  [[ "$status" == 503 ]]
+  grep -q 'server_error' <<<"$responses"
+
+  anthropic=$(curl -sS -m 60 -w $'\n%{http_code}' -X POST http://127.0.0.1:18080/v1/messages \
+    -H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' \
+    -d '{"model":"agent-default","max_tokens":8,"messages":[{"role":"user","content":"error smoke"}]}' )
+  status=${anthropic##*$'\n'}
+  [[ "$status" == 503 ]]
+  grep -q 'api_error' <<<"$anthropic"
+  curl -sS -m 5 -X POST http://127.0.0.1:18091/control/weak-upstream/up >/dev/null
+  echo "error smoke: protocol-specific upstream errors preserved"
+}
+
+stream_smoke
+fragmented_stream_smoke
+error_smoke
 
 ask() {
   local label=$1 prompt=$2 session=${3:-} expected_upstream=${4:-}
@@ -171,12 +340,12 @@ set_judge() {
 }
 
 echo "=== easy (expect weak) ==="
-ask easy1 'What is 2+2?'
+ask easy1 'What is 2+2?' '' weak-upstream
 ask easy2 'What is the capital of France?'
 ask easy3 'Translate hello into Spanish. One word only.'
 
 echo "=== hard (expect strong) ==="
-ask hard1 'Reverse-engineer an undocumented legacy billing service with no harness.'
+ask hard1 'Reverse-engineer an undocumented legacy billing service with no harness.' demo-hard1 strong-upstream
 ask hard2 'From a blurry whiteboard photo with no image or OCR, recover every equation.'
 ask hard3 'Reproduce undocumented acme-vision tensor layouts with no golden files.'
 
@@ -234,4 +403,12 @@ if ! grep -qF "preview='What colour is the sky?'" "$MOCKS_LOG"; then
 fi
 if [[ "$missing" -ne 0 ]]; then
   exit 1
+fi
+
+if [[ "${KEEP_SERVERS:-}" == "1" ]]; then
+  echo "demo checks passed; servers are staying up for manual curl requests" >&2
+  echo "press Ctrl-C to stop the gateway and mock servers" >&2
+  while :; do
+    sleep 3600
+  done
 fi

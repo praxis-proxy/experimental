@@ -6,11 +6,15 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 JUDGE_PORT, WEAK_PORT, STRONG_PORT = 18091, 18092, 18093
 _judge_down = threading.Event()
+_upstream_down = {"weak-upstream": threading.Event(), "strong-upstream": threading.Event()}
+_fragmented_stream = threading.Event()
+_fragmented_stream_release = threading.Event()
 
 # Markers that flip the mock judge to LIM-2 / p_solve=0 (demo hard prompts).
 _HARD_MARKERS = (
@@ -43,6 +47,43 @@ def _write_json(
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+def _write_chat_stream(
+    handler: BaseHTTPRequestHandler, model: str, content: str, fragmented: bool = False
+) -> None:
+    chunks = [
+        _chat_completion_chunk(model, {"role": "assistant", "content": content}, None),
+        _chat_completion_chunk(model, {}, "stop"),
+    ]
+    events = [f"data: {json.dumps(chunk, separators=(',', ':'))}\n\n" for chunk in chunks]
+    events.append("data: [DONE]\n\n")
+    encoded = [event.encode() for event in events]
+    handler.send_response(200)
+    handler.send_header("Content-Type", "text/event-stream")
+    handler.send_header("Cache-Control", "no-cache")
+    handler.send_header("Content-Length", str(sum(len(event) for event in encoded)))
+    handler.end_headers()
+    if not fragmented:
+        handler.wfile.write(b"".join(encoded))
+        return
+    handler.wfile.write(encoded[0])
+    handler.wfile.flush()
+    _fragmented_stream_release.wait(timeout=5)
+    for event in encoded[1:]:
+        handler.wfile.write(event)
+        handler.wfile.flush()
+        time.sleep(0.02)
+
+
+def _chat_completion_chunk(model: str, delta: dict[str, str], finish_reason: str | None) -> dict[str, Any]:
+    return {
+        "id": "chat-stream-mock",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": model,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
 
 
 def _latest_user_text(body: dict[str, Any]) -> str:
@@ -109,6 +150,32 @@ def judge_handler() -> type[BaseHTTPRequestHandler]:
                 print("[judge] up", flush=True)
                 _write_json(self, {"judge": "up"})
                 return
+            if path == "/control/fragmented-stream/on":
+                _read_json(self)
+                _fragmented_stream.set()
+                _fragmented_stream_release.clear()
+                _write_json(self, {"fragmented_stream": "on"})
+                return
+            if path == "/control/fragmented-stream/release":
+                _read_json(self)
+                _fragmented_stream_release.set()
+                _write_json(self, {"fragmented_stream": "released"})
+                return
+            if path == "/control/fragmented-stream/off":
+                _read_json(self)
+                _fragmented_stream.clear()
+                _fragmented_stream_release.set()
+                _write_json(self, {"fragmented_stream": "off"})
+                return
+            for name, event in _upstream_down.items():
+                if path == f"/control/{name}/down":
+                    event.set()
+                    _write_json(self, {name: "down"})
+                    return
+                if path == f"/control/{name}/up":
+                    event.clear()
+                    _write_json(self, {name: "up"})
+                    return
             if not path.startswith("/v1/chat/completions"):
                 self.send_error(404)
                 return
@@ -144,7 +211,21 @@ def judge_handler() -> type[BaseHTTPRequestHandler]:
 def upstream(name: str) -> type[BaseHTTPRequestHandler]:
     class Upstream(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
+            if _request_path(self) != "/v1/chat/completions":
+                self.send_error(404)
+                return
             body = _read_json(self)
+            if _upstream_down[name].is_set():
+                _write_json(self, {"error": f"{name} down"}, status=503)
+                return
+            if body.get("stream") is True:
+                _write_chat_stream(
+                    self,
+                    body.get("model") or name,
+                    f"served_by={name}",
+                    fragmented=_fragmented_stream.is_set(),
+                )
+                return
             _write_json(
                 self,
                 _chat_completion(body.get("model") or name, f"served_by={name}"),
