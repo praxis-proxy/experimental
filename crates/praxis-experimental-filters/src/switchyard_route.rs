@@ -1,5 +1,8 @@
 //! `switchyard_route`: Mixture-of-Models routing via NVIDIA `NeMo` Switchyard
 //! (Capability mode). Decision-only: judge → weak/strong tier → cluster+model.
+//! Protocol translators run before this filter and leave a Chat Completions
+//! request body for the routing decision; the public client path is preserved
+//! until the appropriate path/response translator handles it downstream.
 //!
 //! Demo greps `judge verdict` / `routed` / `floor_skip` / `reuse` /
 //! `default_strong` / `routing failed` / `fail-open` in
@@ -85,9 +88,11 @@ impl SwitchyardRouteFilter {
     async fn route(&self, ctx: &mut HttpFilterContext<'_>, body: &mut Option<Bytes>) -> Result<Tier, RouteError> {
         let value = parse_body(body.as_ref())?;
 
-        // Detect wire format from path
+        // Upstream translators normalize Responses and Anthropic bodies to Chat
+        // before this phase. Keep their public path visible so downstream
+        // response translators can restore the original client protocol.
         let path = ctx.request.uri.path();
-        if !path.ends_with("/chat/completions") {
+        if !is_supported_inference_path(path) {
             return Err(RouteError::UnsupportedPath);
         }
 
@@ -580,6 +585,14 @@ fn log_judge_verdict(body: &[u8]) {
     debug!(?p_solve, rule, boundary, "switchyard_route: judge verdict");
 }
 
+/// Translators normalize Responses and Anthropic bodies before this filter;
+/// retaining the original path lets downstream translators restore the client
+/// protocol.
+fn is_supported_inference_path(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    matches!(path, "/v1/chat/completions" | "/v1/responses" | "/v1/messages")
+}
+
 /// Parses the buffered body as JSON.
 fn parse_body(body: Option<&Bytes>) -> Result<serde_json::Value, RouteError> {
     let raw = body.ok_or(RouteError::Body("missing"))?;
@@ -660,8 +673,8 @@ enum RouteError {
     /// Body bytes were not valid JSON.
     #[error("invalid JSON: {0}")]
     Json(String),
-    /// Path is not an `OpenAI` chat completions endpoint.
-    #[error("unsupported path (only /chat/completions)")]
+    /// Path is not one of the supported inference endpoints.
+    #[error("unsupported path (expected /v1/chat/completions, /v1/responses, or /v1/messages)")]
     UnsupportedPath,
     /// `OpenAI` ↔ Switchyard IR translation failed.
     #[error("translation failed: {0}")]
@@ -1391,6 +1404,33 @@ mod tests {
     }
 
     #[test]
+    fn accepts_supported_public_inference_paths() {
+        for path in ["/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/messages/"] {
+            assert!(
+                is_supported_inference_path(path),
+                "normalized inference path should be accepted: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unrelated_public_paths() {
+        for path in [
+            "/v1/embeddings",
+            "/v1/models",
+            "/v1/messages/count_tokens",
+            "/v1/foo/responses",
+            "/v1/foo/messages",
+            "/gateway/custom/messages",
+        ] {
+            assert!(
+                !is_supported_inference_path(path),
+                "non-inference path should remain outside Switchyard routing: {path}"
+            );
+        }
+    }
+
+    #[test]
     fn decodes_a_chat_body_for_the_judge() {
         let value = serde_json::json!({
             "model": "client-model",
@@ -1486,7 +1526,10 @@ mod tests {
                 RouteError::Json("expected value".to_owned()),
                 "invalid JSON: expected value",
             ),
-            (RouteError::UnsupportedPath, "unsupported path (only /chat/completions)"),
+            (
+                RouteError::UnsupportedPath,
+                "unsupported path (expected /v1/chat/completions, /v1/responses, or /v1/messages)",
+            ),
             (
                 RouteError::Translation("no messages".to_owned()),
                 "translation failed: no messages",
@@ -1554,6 +1597,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn accepts_normalized_responses_and_anthropic_paths() {
+        let filter = make_filter("http://127.0.0.1:1/v1/chat/completions", "open");
+        for path in ["/v1/responses", "/v1/messages"] {
+            let request = make_request(path);
+            let mut ctx = make_ctx(&request, None);
+            let mut body = Some(chat_body("hello"));
+
+            let action = filter
+                .on_request_body(&mut ctx, &mut body, true)
+                .await
+                .expect("fail-open never returns an error");
+
+            assert!(
+                matches!(action, FilterAction::Continue),
+                "normalized {path} requests should reach the routing decision"
+            );
+            assert_eq!(
+                ctx.get_metadata(METADATA_ERROR),
+                Some("subrequest client unavailable"),
+                "the path must pass the endpoint gate before the judge callout"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn fails_closed_when_routing_fails() {
         let filter = make_filter("http://127.0.0.1:1/v1/chat/completions", "closed");
         let request = make_request("/v1/chat/completions");
@@ -1575,7 +1643,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_non_chat_completion_paths() {
+    async fn rejects_non_inference_paths() {
         let filter = make_filter("http://127.0.0.1:1/v1/chat/completions", "closed");
         let request = make_request("/v1/embeddings");
         let mut ctx = make_ctx(&request, None);
@@ -1588,11 +1656,11 @@ mod tests {
 
         assert!(
             matches!(action, FilterAction::Reject(_)),
-            "only /chat/completions can be routed"
+            "unrelated endpoints cannot be routed"
         );
         assert_eq!(
             ctx.get_metadata("switchyard_route.error"),
-            Some("unsupported path (only /chat/completions)"),
+            Some("unsupported path (expected /v1/chat/completions, /v1/responses, or /v1/messages)"),
             "the recorded reason must name the path problem"
         );
     }
@@ -1770,7 +1838,6 @@ mod tests {
             "a refused connection must surface as a judge callout failure, got {recorded}"
         );
     }
-
 
     #[test]
     fn judge_failures_may_apply_a_fallback_tier() {

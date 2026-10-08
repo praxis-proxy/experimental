@@ -14,7 +14,49 @@ listeners:
 filter_chains:
   - name: routing
     filters:
+      # Normalize public Responses and Anthropic requests before Switchyard.
+      # Each translator is scoped to its own public endpoint; Chat requests
+      # pass through unchanged.
+      - filter: openai_responses_format
+        conditions:
+          - when:
+              path_prefix: "/v1/responses"
+              methods: [POST]
+      - filter: openai_responses_validate
+        conditions:
+          - when:
+              path_prefix: "/v1/responses"
+              methods: [POST]
+      - filter: responses_to_chat_completions
+        conditions:
+          - when:
+              path_prefix: "/v1/responses"
+              methods: [POST]
+      - filter: anthropic_messages_format
+        conditions:
+          - when:
+              path_prefix: "/v1/messages"
+              methods: [POST]
+      - filter: anthropic_validate
+        conditions:
+          - when:
+              path_prefix: "/v1/messages"
+              methods: [POST]
+      - filter: anthropic_messages_to_chat_completions
+        conditions:
+          - when:
+              path_prefix: "/v1/messages"
+              methods: [POST]
+      - filter: anthropic_messages_to_chat_completions_stream
+        response_conditions:
+          - when:
+              headers:
+                content-type: "text/event-stream"
       - filter: switchyard_route
+        conditions:
+          - when:
+              path_prefix: "/v1/"
+              methods: [POST]
         judge:
           endpoint: "__JUDGE_ENDPOINT__"
           model: "__JUDGE_MODEL__"
@@ -29,6 +71,17 @@ filter_chains:
             model: mock-strong
         on_failure: open
         session_floor: __SESSION_FLOOR__
+      # The backend mocks speak Chat Completions. Keep the public path through
+      # Switchyard, then rewrite it once before the upstream load balancer.
+      - filter: url_rewrite
+        operations:
+          - regex_replace:
+              pattern: "^/v1/(responses|messages)/?$"
+              replacement: "/v1/chat/completions"
+        conditions:
+          - when:
+              path_prefix: "/v1/"
+              methods: [POST]
       - filter: load_balancer
         clusters:
           - name: weak-cluster

@@ -20,8 +20,10 @@ reused (`reuse`). An empty store serves Strong once without writing the map
 
 ## Flow
 
-1. **`on_request_body`**: buffer JSON, require `*/chat/completions`, derive
-   the session key.
+1. **`on_request_body`**: buffer JSON, require an inference endpoint
+   (`*/chat/completions`, `*/responses`, or `*/messages`), derive the session
+   key, and expect Responses/Anthropic bodies to have been normalized to Chat
+   Completions by an upstream Praxis AI translator.
    - If `session_floor` is enabled and the stored tier is Strong: rewrite
      Strong, set `decision=floor_skip`, refresh idle TTL. The judge is not
      called and the map is not rewritten.
@@ -92,7 +94,13 @@ without a header that start with the same user line share a key.
   session_floor: enabled  # enabled (default) | disabled
 ```
 
-- Path: `*/chat/completions` only.
+- Path: `*/chat/completions`, `*/responses`, or `*/messages`. Responses and
+  Anthropic requests require their upstream protocol translator before this
+  filter; the public path remains available for downstream path and response
+  translation.
+- The local demo exercises finite JSON responses, SSE streams, and upstream
+  `503` errors for Responses and Anthropic, in addition to the existing Chat
+  routing scenarios.
 - Secrets: `judge.auth.value_env` only (never inline).
 
 ### `session_floor`
@@ -109,7 +117,7 @@ without a header that start with the same user line share a key.
 | `open` | Reuse last Weak or Strong (`decision=reuse`) | Serve Strong, do not write the map (`decision=default_strong`) |
 | `closed` | HTTP 503; map is ignored | HTTP 503 |
 
-Wrong path or unparsable JSON still fail-open unrouted or 503; those
+An unrelated path or unparsable JSON still fail-open unrouted or 503; those
 requests are not rewritten to a sticky tier.
 
 A Strong floor skips the judge, so a down judge on that session is
