@@ -26,7 +26,7 @@ serde = { workspace = true }
 serde_json = "1.0.151"
 serde_yaml = { package = "yaml_serde", version = "0.10.4" }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["net"] }
+tokio = { workspace = true, features = ["net", "fs", "io-util"] }
 tracing = { workspace = true }
 
 # Inherit the AI release's core version so shared Rust types unify.
@@ -41,6 +41,12 @@ switchyard-libsy = "=0.2.0"
 switchyard-protocol = "=0.2.0"
 switchyard-translation = "=0.2.0"
 
+jsonwebtoken = { version = "11.1.0", features = ["aws_lc_rs"] }
+sha2 = "0.10.9"
+hex = "0.4.3"
+url = "2.5.8"
+
 [dev-dependencies]
+tempfile = "3.27.0"
 praxis-tls.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

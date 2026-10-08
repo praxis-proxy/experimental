@@ -23,6 +23,11 @@ documentation, dependency auditing, and supply-chain checks. See
 [docs/development.md](docs/development.md) for prerequisites and individual
 commands.
 
+## Standalone authentication
+
+[Manual JWT authentication](docs/manual-jwt.md) provides administrator-issued
+credentials, per-user revocation and a private dashboard login callback.
+
 ## Demos
 
 See [demos/README.md](demos/README.md) for the index of experimental demos.

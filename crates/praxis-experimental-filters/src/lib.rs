@@ -6,10 +6,12 @@
 //! code calls [`register_filters`], which is emitted by the
 //! [`praxis_filter::export_filters!`] macro invoked below.
 
+mod manual_jwt;
 mod placeholder;
 mod switchyard_route;
 
 praxis_filter::export_filters! {
+    http "manual_jwt" => manual_jwt::ManualJwtFilter::from_config,
     http "experimental_placeholder" => placeholder::PlaceholderFilter::from_config,
     http "switchyard_route" => switchyard_route::SwitchyardRouteFilter::from_config,
 }

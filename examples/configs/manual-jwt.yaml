@@ -1,0 +1,31 @@
+# Supply the public key and live registry before starting this example.
+# These listeners are private. Put TLS and a route allowlist at the public edge.
+admin:
+  address: 127.0.0.1:9901
+listeners:
+  - name: inference
+    address: 127.0.0.1:18082
+    filter_chains: [authenticated]
+  - name: metering-login-validation
+    address: 127.0.0.1:18084
+    filter_chains: [callback]
+filter_chains:
+  - name: authenticated
+    filters:
+      - filter: manual_jwt
+        mode: inference
+        issuer: https://secure-single-server.local
+        audience: praxis-gateway
+        public_key_file: /etc/praxis/jwt-public.pem
+        registry_file: /etc/praxis/users.json
+      - filter: static_response
+        status: 200
+        body: Authenticated
+  - name: callback
+    filters:
+      - filter: manual_jwt
+        mode: callback
+        issuer: https://secure-single-server.local
+        audience: praxis-gateway
+        public_key_file: /etc/praxis/jwt-public.pem
+        registry_file: /etc/praxis/users.json
