@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
-"""Local mocks for switchyard_route: judge :18091, weak :18092, strong :18093."""
+"""Local mocks for switchyard_route: judge, primary tiers, and failure target."""
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-JUDGE_PORT, WEAK_PORT, STRONG_PORT = 18091, 18092, 18093
+JUDGE_PORT, WEAK_PORT, STRONG_PORT, FAILURE_PORT = 18091, 18092, 18093, 18094
 _judge_down = threading.Event()
-_upstream_down = {"weak-upstream": threading.Event(), "strong-upstream": threading.Event()}
+_upstream_down = {
+    "weak-upstream": threading.Event(),
+    "strong-upstream": threading.Event(),
+    "failure-upstream": threading.Event(),
+}
 _fragmented_stream = threading.Event()
 _fragmented_stream_release = threading.Event()
+_failure_authorization = f"Bearer {os.environ.get('SWITCHYARD_FAILURE_API_KEY', 'demo-failure-key')}"
 
 # Markers that flip the mock judge to LIM-2 / p_solve=0 (demo hard prompts).
 _HARD_MARKERS = (
@@ -215,6 +221,16 @@ def upstream(name: str) -> type[BaseHTTPRequestHandler]:
                 self.send_error(404)
                 return
             body = _read_json(self)
+            if name == "failure-upstream":
+                if self.headers.get("Content-Type") != "application/json":
+                    self.send_error(415, "failure request must be JSON")
+                    return
+                if self.headers.get("Authorization") != _failure_authorization:
+                    self.send_error(401, "failure credential missing or invalid")
+                    return
+                if body.get("model") != "mock-failure":
+                    self.send_error(400, "failure model was not applied")
+                    return
             if _upstream_down[name].is_set():
                 _write_json(self, {"error": f"{name} down"}, status=503)
                 return
@@ -249,6 +265,7 @@ if __name__ == "__main__":
         serve(JUDGE_PORT, judge_handler()),
         serve(WEAK_PORT, upstream("weak-upstream")),
         serve(STRONG_PORT, upstream("strong-upstream")),
+        serve(FAILURE_PORT, upstream("failure-upstream")),
     ]
     print("mocks ready", flush=True)
     try:
