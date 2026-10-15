@@ -1,5 +1,8 @@
 //! `switchyard_route`: Mixture-of-Models routing via NVIDIA `NeMo` Switchyard
 //! (Capability mode). Decision-only: judge → weak/strong tier → cluster+model.
+//! Protocol translators run before this filter and leave a Chat Completions
+//! request body for the routing decision; the public client path is preserved
+//! until the appropriate path/response translator handles it downstream.
 //!
 //! Demo greps `judge verdict` / `routed` / `floor_skip` / `reuse` /
 //! `default_strong` / `routing failed` / `fail-open` in
@@ -29,6 +32,8 @@ use praxis_filter::{BodyAccess, BodyMode, FilterAction, FilterError, HttpFilter,
 use switchyard_libsy::Algorithm;
 use tracing::{debug, warn};
 
+#[cfg(test)]
+use self::config::DEFAULT_MAX_BODY_BYTES;
 use self::config::{RouteConfig, SessionFloor, Tier};
 
 /// Metadata key for the chosen cluster (body phase → `on_request`).
@@ -40,8 +45,23 @@ const METADATA_DECISION: &str = "switchyard_route.decision";
 /// Truncated routing error; set on every judge/decode failure.
 const METADATA_ERROR: &str = "switchyard_route.error";
 
-/// Default max body size for buffering (1 MiB).
-const DEFAULT_MAX_BODY_BYTES: usize = 1_048_576; // 1 MiB
+/// Format classified by the stock Responses boundary filter.
+const RESPONSES_FORMAT: &str = "openai_responses_format.format";
+
+/// Set by the stock Responses translator only after replacing the request body.
+const RESPONSES_TRANSLATION_ARMED: &str = "responses_to_chat_completions.armed";
+
+/// Format classified by the stock Anthropic boundary filter.
+const ANTHROPIC_FORMAT: &str = "anthropic_messages_format.format";
+
+/// Request facts extracted by the stock Anthropic translator.
+const ANTHROPIC_TRANSLATED_MODEL: &str = "anthropic_messages_to_chat_completions.model";
+
+/// Streaming fact extracted by the stock Anthropic translator.
+const ANTHROPIC_TRANSLATED_STREAMING: &str = "anthropic_messages_to_chat_completions.streaming";
+
+/// Maximum judge-response body size (1 MiB).
+const MAX_JUDGE_RESPONSE_BYTES: usize = 1024 * 1024;
 
 /// The `switchyard_route` HTTP filter.
 pub(crate) struct SwitchyardRouteFilter {
@@ -85,9 +105,11 @@ impl SwitchyardRouteFilter {
     async fn route(&self, ctx: &mut HttpFilterContext<'_>, body: &mut Option<Bytes>) -> Result<Tier, RouteError> {
         let value = parse_body(body.as_ref())?;
 
-        // Detect wire format from path
+        // Upstream translators normalize Responses and Anthropic bodies to Chat
+        // before this phase. Keep their public path visible so downstream
+        // response translators can restore the original client protocol.
         let path = ctx.request.uri.path();
-        if !path.ends_with("/chat/completions") {
+        if !is_supported_inference_path(path) || !has_translation_evidence(ctx, path) {
             return Err(RouteError::UnsupportedPath);
         }
 
@@ -312,7 +334,13 @@ async fn fetch_judge_body(callout: &JudgeCallout<'_>, addr: std::net::SocketAddr
     let peer = build_judge_peer(addr, callout.endpoint, callout.verify_tls);
     let response = callout
         .client
-        .execute(&peer, callout.subrequest, DEFAULT_MAX_BODY_BYTES, callout.timeout, None)
+        .execute(
+            &peer,
+            callout.subrequest,
+            MAX_JUDGE_RESPONSE_BYTES,
+            callout.timeout,
+            None,
+        )
         .await
         .map_err(|err| JudgeAttemptError::Retryable(format!("{addr}: {err}")))?;
 
@@ -372,7 +400,7 @@ impl HttpFilter for SwitchyardRouteFilter {
 
     fn request_body_mode(&self) -> BodyMode {
         BodyMode::StreamBuffer {
-            max_bytes: Some(DEFAULT_MAX_BODY_BYTES),
+            max_bytes: Some(self.config.max_body_bytes),
         }
     }
 
@@ -393,6 +421,14 @@ impl HttpFilter for SwitchyardRouteFilter {
         // StreamBuffer may invoke this before the full body is available.
         if !end_of_stream {
             return Ok(FilterAction::Continue);
+        }
+
+        if body
+            .as_ref()
+            .is_some_and(|body| body.len() > self.config.max_body_bytes)
+        {
+            ctx.set_metadata(METADATA_ERROR, "request body exceeds configured maximum");
+            return Ok(reject_body_too_large(ctx));
         }
 
         match self.route(ctx, body).await {
@@ -576,6 +612,38 @@ fn log_judge_verdict(body: &[u8]) {
     debug!(?p_solve, rule, boundary, "switchyard_route: judge verdict");
 }
 
+/// Preserves the original Switchyard suffix contract for Chat Completions.
+fn is_chat_completions_path(path: &str) -> bool {
+    path.strip_suffix('/').unwrap_or(path).ends_with("/chat/completions")
+}
+
+/// Accepts Chat suffixes plus the exact public paths that the current
+/// Responses and Anthropic translators recognize.
+fn is_supported_inference_path(path: &str) -> bool {
+    let path = path.strip_suffix('/').unwrap_or(path);
+    is_chat_completions_path(path) || matches!(path, "/v1/responses" | "/v1/messages")
+}
+
+/// Checks the stock translators' existing per-request proof of normalization.
+fn has_translation_evidence(ctx: &HttpFilterContext<'_>, path: &str) -> bool {
+    let path = path.strip_suffix('/').unwrap_or(path);
+    if is_chat_completions_path(path) {
+        return true;
+    }
+    match path {
+        "/v1/responses" => {
+            ctx.get_metadata(RESPONSES_FORMAT) == Some("openai_responses")
+                && ctx.get_metadata(RESPONSES_TRANSLATION_ARMED) == Some("true")
+        },
+        "/v1/messages" => {
+            ctx.get_metadata(ANTHROPIC_FORMAT) == Some("anthropic_messages")
+                && ctx.get_metadata(ANTHROPIC_TRANSLATED_MODEL).is_some()
+                && ctx.get_metadata(ANTHROPIC_TRANSLATED_STREAMING).is_some()
+        },
+        _ => false,
+    }
+}
+
 /// Parses the buffered body as JSON.
 fn parse_body(body: Option<&Bytes>) -> Result<serde_json::Value, RouteError> {
     let raw = body.ok_or(RouteError::Body("missing"))?;
@@ -624,6 +692,12 @@ fn reject_closed(ctx: &mut HttpFilterContext<'_>) -> FilterAction {
     FilterAction::Reject(Rejection::status(503))
 }
 
+/// HTTP 413 for a request that exceeds Switchyard's configured body limit.
+fn reject_body_too_large(ctx: &mut HttpFilterContext<'_>) -> FilterAction {
+    ctx.set_metadata(METADATA_DECISION, failure::DECISION_REJECTED);
+    FilterAction::Reject(Rejection::status(413))
+}
+
 /// Continue without a Switchyard cluster (`open` and we cannot rewrite).
 fn fail_open_unrouted(ctx: &mut HttpFilterContext<'_>) -> FilterAction {
     ctx.set_metadata(METADATA_DECISION, failure::DECISION_UNROUTED);
@@ -656,8 +730,8 @@ enum RouteError {
     /// Body bytes were not valid JSON.
     #[error("invalid JSON: {0}")]
     Json(String),
-    /// Path is not an `OpenAI` chat completions endpoint.
-    #[error("unsupported path (only /chat/completions)")]
+    /// Path is not one of the supported inference endpoints.
+    #[error("unsupported path (expected a path ending in /chat/completions, /v1/responses, or /v1/messages)")]
     UnsupportedPath,
     /// `OpenAI` ↔ Switchyard IR translation failed.
     #[error("translation failed: {0}")]
@@ -829,9 +903,33 @@ mod tests {
         }
     }
 
+    /// Installs the metadata emitted by a successful stock protocol translator.
+    fn install_translation_evidence(ctx: &mut HttpFilterContext<'_>, path: &str) {
+        match path {
+            "/v1/responses" => {
+                ctx.set_metadata(RESPONSES_FORMAT, "openai_responses");
+                ctx.set_metadata(RESPONSES_TRANSLATION_ARMED, "true");
+            },
+            "/v1/messages" => {
+                ctx.set_metadata(ANTHROPIC_FORMAT, "anthropic_messages");
+                ctx.set_metadata(ANTHROPIC_TRANSLATED_MODEL, "client-model");
+                ctx.set_metadata(ANTHROPIC_TRANSLATED_STREAMING, "false");
+            },
+            other => panic!("no translation evidence fixture for {other}"),
+        }
+    }
+
     /// Builds filter YAML pointing at `endpoint` with the given failure mode.
     fn config_yaml(endpoint: &str, on_failure: &str) -> serde_yaml::Value {
         config_yaml_full(endpoint, on_failure, "enabled")
+    }
+
+    /// Builds filter YAML with an explicit Switchyard request-body limit.
+    fn config_yaml_with_body_limit(endpoint: &str, on_failure: &str, max_body_bytes: usize) -> serde_yaml::Value {
+        let mut yaml = config_yaml(endpoint, on_failure);
+        let max_body_bytes = u64::try_from(max_body_bytes).expect("body limit fits in u64");
+        yaml["max_body_bytes"] = serde_yaml::Value::Number(serde_yaml::Number::from(max_body_bytes));
+        yaml
     }
 
     /// Builds filter YAML with an explicit `session_floor` setting.
@@ -861,6 +959,12 @@ mod tests {
     /// Builds a filter whose judge lives at `endpoint`.
     fn make_filter(endpoint: &str, on_failure: &str) -> Box<dyn HttpFilter> {
         SwitchyardRouteFilter::from_config(&config_yaml(endpoint, on_failure)).expect("test filter config is valid")
+    }
+
+    /// Builds a filter with an explicit Switchyard request-body limit.
+    fn make_filter_with_body_limit(endpoint: &str, on_failure: &str, max_body_bytes: usize) -> Box<dyn HttpFilter> {
+        SwitchyardRouteFilter::from_config(&config_yaml_with_body_limit(endpoint, on_failure, max_body_bytes))
+            .expect("test filter config is valid")
     }
 
     /// Builds a filter with an explicit `session_floor` setting.
@@ -1231,6 +1335,20 @@ mod tests {
     }
 
     #[test]
+    fn advertises_the_configured_body_limit() {
+        let filter = make_filter_with_body_limit("http://127.0.0.1:1/v1/chat/completions", "open", 2_097_152);
+        assert!(
+            matches!(
+                filter.request_body_mode(),
+                BodyMode::StreamBuffer {
+                    max_bytes: Some(2_097_152)
+                }
+            ),
+            "the configured Switchyard limit must participate in pipeline buffering"
+        );
+    }
+
+    #[test]
     fn debug_omits_the_algorithm() {
         let config =
             config::parse(&config_yaml("http://127.0.0.1:1/v1/chat/completions", "open")).expect("config is valid");
@@ -1574,6 +1692,95 @@ mod tests {
     }
 
     #[test]
+    fn accepts_supported_public_inference_paths() {
+        for path in [
+            "/v1/chat/completions",
+            "/openai/v1/chat/completions",
+            "/openai/v1/chat/completions/",
+            "/v1/responses",
+            "/v1/messages",
+            "/v1/messages/",
+        ] {
+            assert!(
+                is_supported_inference_path(path),
+                "normalized inference path should be accepted: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unrelated_public_paths() {
+        for path in [
+            "/v1/embeddings",
+            "/v1/models",
+            "/v1/messages/count_tokens",
+            "/v1/foo/responses",
+            "/v1/foo/messages",
+            "/openai/v1/responses",
+            "/openai/v1/messages",
+            "/gateway/custom/messages",
+            "/v1/responses//",
+            "/v1/messages//",
+        ] {
+            assert!(
+                !is_supported_inference_path(path),
+                "non-inference path should remain outside Switchyard routing: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn requires_complete_translation_evidence_for_non_chat_paths() {
+        let responses = make_request("/v1/responses");
+        let mut responses_ctx = make_ctx(&responses, None);
+        assert!(
+            !has_translation_evidence(&responses_ctx, responses.uri.path()),
+            "the public Responses path alone must not prove normalization"
+        );
+        responses_ctx.set_metadata(RESPONSES_FORMAT, "openai_responses");
+        assert!(
+            !has_translation_evidence(&responses_ctx, responses.uri.path()),
+            "classification without the translator's armed marker is incomplete"
+        );
+        responses_ctx.set_metadata(RESPONSES_TRANSLATION_ARMED, "true");
+        assert!(
+            has_translation_evidence(&responses_ctx, responses.uri.path()),
+            "matching Responses classification plus armed marker proves normalization"
+        );
+        responses_ctx.set_metadata(RESPONSES_FORMAT, "openai_chat_completions");
+        assert!(
+            !has_translation_evidence(&responses_ctx, responses.uri.path()),
+            "the armed marker cannot override a mismatched source classification"
+        );
+
+        let messages = make_request("/v1/messages");
+        let mut messages_ctx = make_ctx(&messages, None);
+        messages_ctx.set_metadata(ANTHROPIC_FORMAT, "anthropic_messages");
+        messages_ctx.set_metadata(ANTHROPIC_TRANSLATED_MODEL, "client-model");
+        assert!(
+            !has_translation_evidence(&messages_ctx, messages.uri.path()),
+            "Anthropic evidence requires every request fact emitted by the translator"
+        );
+        messages_ctx.set_metadata(ANTHROPIC_TRANSLATED_STREAMING, "false");
+        assert!(
+            has_translation_evidence(&messages_ctx, messages.uri.path()),
+            "matching Anthropic classification and translator facts prove normalization"
+        );
+        messages_ctx.set_metadata(ANTHROPIC_FORMAT, "openai_responses");
+        assert!(
+            !has_translation_evidence(&messages_ctx, messages.uri.path()),
+            "translator facts cannot override a mismatched source classification"
+        );
+
+        let chat = make_request("/v1/chat/completions");
+        let chat_ctx = make_ctx(&chat, None);
+        assert!(
+            has_translation_evidence(&chat_ctx, chat.uri.path()),
+            "native Chat requests need no protocol translation evidence"
+        );
+    }
+
+    #[test]
     fn decodes_a_chat_body_for_the_judge() {
         let value = serde_json::json!({
             "model": "client-model",
@@ -1669,7 +1876,10 @@ mod tests {
                 RouteError::Json("expected value".to_owned()),
                 "invalid JSON: expected value",
             ),
-            (RouteError::UnsupportedPath, "unsupported path (only /chat/completions)"),
+            (
+                RouteError::UnsupportedPath,
+                "unsupported path (expected a path ending in /chat/completions, /v1/responses, or /v1/messages)",
+            ),
             (
                 RouteError::Translation("no messages".to_owned()),
                 "translation failed: no messages",
@@ -1713,6 +1923,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn body_limit_rejects_with_413_and_a_raised_limit_accepts_the_same_body() {
+        let oversized = chat_body(&"x".repeat(DEFAULT_MAX_BODY_BYTES));
+        let request = make_request("/v1/chat/completions");
+        let mut default_ctx = make_ctx(&request, None);
+        let mut default_body = Some(oversized.clone());
+        let default_filter = make_filter("http://127.0.0.1:1/v1/chat/completions", "open");
+
+        let action = default_filter
+            .on_request_body(&mut default_ctx, &mut default_body, true)
+            .await
+            .expect("an oversized body is rejected directly, not returned as a filter error");
+
+        let FilterAction::Reject(rejection) = action else {
+            panic!("the default 1 MiB limit must reject even when on_failure is open");
+        };
+        assert_eq!(rejection.status, 413, "an oversized body must be Payload Too Large");
+        assert_eq!(
+            default_ctx.get_metadata(METADATA_ERROR),
+            Some("request body exceeds configured maximum"),
+            "the rejection reason must be observable"
+        );
+        assert!(
+            default_ctx.get_metadata(METADATA_CLUSTER).is_none(),
+            "an oversized body must not select an upstream cluster"
+        );
+
+        let raised_filter =
+            make_filter_with_body_limit("http://127.0.0.1:1/v1/chat/completions", "open", oversized.len() + 1);
+        let mut raised_ctx = make_ctx(&request, None);
+        let mut raised_body = Some(oversized);
+        let raised_action = raised_filter
+            .on_request_body(&mut raised_ctx, &mut raised_body, true)
+            .await
+            .expect("a body below the configured limit reaches normal routing");
+
+        assert!(
+            matches!(raised_action, FilterAction::Continue),
+            "raising max_body_bytes must allow the same request through the size gate"
+        );
+        assert_eq!(
+            raised_ctx.get_metadata(METADATA_ERROR),
+            Some("subrequest client unavailable"),
+            "reaching the regular judge path proves size validation did not reject it"
+        );
+    }
+
+    #[tokio::test]
     async fn fails_open_when_routing_fails() {
         // No subrequest client in the context, so the judge can never be called.
         let filter = make_filter("http://127.0.0.1:1/v1/chat/completions", "open");
@@ -1737,6 +1994,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn accepts_normalized_responses_and_anthropic_paths() {
+        let filter = make_filter("http://127.0.0.1:1/v1/chat/completions", "open");
+        for path in ["/v1/responses", "/v1/messages"] {
+            let request = make_request(path);
+            let mut ctx = make_ctx(&request, None);
+            install_translation_evidence(&mut ctx, path);
+            let mut body = Some(chat_body("hello"));
+
+            let action = filter
+                .on_request_body(&mut ctx, &mut body, true)
+                .await
+                .expect("fail-open never returns an error");
+
+            assert!(
+                matches!(action, FilterAction::Continue),
+                "normalized {path} requests should reach the routing decision"
+            );
+            assert_eq!(
+                ctx.get_metadata(METADATA_ERROR),
+                Some("subrequest client unavailable"),
+                "the path must pass the endpoint gate before the judge callout"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_non_chat_paths_without_translation_evidence() {
+        let filter = make_filter("http://127.0.0.1:1/v1/chat/completions", "closed");
+        for path in ["/v1/responses", "/v1/messages"] {
+            let request = make_request(path);
+            let mut ctx = make_ctx(&request, None);
+            let mut body = Some(chat_body("hello"));
+
+            let action = filter
+                .on_request_body(&mut ctx, &mut body, true)
+                .await
+                .expect("missing translation evidence is a routing rejection");
+
+            assert!(
+                matches!(action, FilterAction::Reject(_)),
+                "an unproven {path} body must not reach the judge"
+            );
+            assert_eq!(
+                ctx.get_metadata(METADATA_ERROR),
+                Some("unsupported path (expected a path ending in /chat/completions, /v1/responses, or /v1/messages)"),
+                "the missing proof must use the unsupported-path failure path"
+            );
+            assert!(
+                ctx.get_metadata(METADATA_CLUSTER).is_none(),
+                "an unproven {path} body must not select an upstream cluster"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn fails_closed_when_routing_fails() {
         let filter = make_filter("http://127.0.0.1:1/v1/chat/completions", "closed");
         let request = make_request("/v1/chat/completions");
@@ -1758,7 +2070,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_non_chat_completion_paths() {
+    async fn rejects_non_inference_paths() {
         let filter = make_filter("http://127.0.0.1:1/v1/chat/completions", "closed");
         let request = make_request("/v1/embeddings");
         let mut ctx = make_ctx(&request, None);
@@ -1771,11 +2083,11 @@ mod tests {
 
         assert!(
             matches!(action, FilterAction::Reject(_)),
-            "only /chat/completions can be routed"
+            "unrelated endpoints cannot be routed"
         );
         assert_eq!(
             ctx.get_metadata("switchyard_route.error"),
-            Some("unsupported path (only /chat/completions)"),
+            Some("unsupported path (expected a path ending in /chat/completions, /v1/responses, or /v1/messages)"),
             "the recorded reason must name the path problem"
         );
     }
@@ -1953,7 +2265,6 @@ mod tests {
             "a refused connection must surface as a judge callout failure, got {recorded}"
         );
     }
-
 
     #[test]
     fn judge_failures_may_apply_a_fallback_tier() {

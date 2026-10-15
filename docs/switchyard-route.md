@@ -20,8 +20,11 @@ reused (`reuse`). An empty store serves Strong once without writing the map
 
 ## Flow
 
-1. **`on_request_body`**: buffer JSON, require `*/chat/completions`, derive
-   the session key.
+1. **`on_request_body`**: buffer JSON, require a supported inference endpoint
+   (a path ending in `/chat/completions`, exact `/v1/responses`, or exact
+   `/v1/messages`), derive the session
+   key, and expect Responses/Anthropic bodies to have been normalized to Chat
+   Completions by an upstream Praxis AI translator.
    - If `session_floor` is enabled and the stored tier is Strong: rewrite
      Strong, set `decision=floor_skip`, refresh idle TTL. The judge is not
      called and the map is not rewritten.
@@ -90,10 +93,33 @@ without a header that start with the same user line share a key.
       model: mock-strong
   on_failure: open      # open | closed
   session_floor: enabled  # enabled (default) | disabled
+  max_body_bytes: 1048576 # 1 MiB default; requests above this receive 413
 ```
 
-- Path: `*/chat/completions` only.
+- Path: Chat Completions accepts any path ending in `/chat/completions` to
+  preserve the original Switchyard contract. Responses accepts exact
+  `/v1/responses` and Anthropic Messages accepts exact `/v1/messages` (each
+  also accepts one trailing slash); the current Praxis AI translators require
+  those exact public paths. Responses and Anthropic requests require their
+  upstream protocol translator before this filter; the public path remains
+  available for downstream path and response translation.
+- The local demo exercises finite JSON responses, SSE streams, and upstream
+  `503` errors for Responses and Anthropic, in addition to the existing Chat
+  routing scenarios.
 - Secrets: `judge.auth.value_env` only (never inline).
+
+### `max_body_bytes`
+
+The maximum translated Chat Completions request body that Switchyard accepts.
+It defaults to 1 MiB. A larger body is rejected with HTTP `413 Payload Too
+Large` before Switchyard parses it, calls the judge, or selects an upstream;
+this is independent of `on_failure`.
+
+This setting controls Switchyard only. It directly limits Chat and can allow
+larger Responses requests, subject to the outer transport limit. Anthropic
+filters run before Switchyard and default to 1 MiB, so raising this value alone
+does not enlarge Messages requests; raise their matching limits and the outer
+transport cap too.
 
 ### `session_floor`
 
@@ -109,7 +135,7 @@ without a header that start with the same user line share a key.
 | `open` | Reuse last Weak or Strong (`decision=reuse`) | Serve Strong, do not write the map (`decision=default_strong`) |
 | `closed` | HTTP 503; map is ignored | HTTP 503 |
 
-Wrong path or unparsable JSON still fail-open unrouted or 503; those
+An unrelated path or unparsable JSON still fail-open unrouted or 503; those
 requests are not rewritten to a sticky tier.
 
 A Strong floor skips the judge, so a down judge on that session is

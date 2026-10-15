@@ -10,8 +10,11 @@
     )
 )]
 
-use praxis_filter::FilterError;
+use praxis_filter::{FilterError, body::MAX_JSON_BODY_BYTES};
 use serde::Deserialize;
+
+/// Default maximum request body size accepted by Switchyard (1 MiB).
+pub(crate) const DEFAULT_MAX_BODY_BYTES: usize = 1_048_576;
 
 /// Validated filter configuration.
 #[derive(Debug, Clone)]
@@ -20,6 +23,7 @@ pub(crate) struct RouteConfig {
     pub(crate) weak: TargetConfig,
     pub(crate) strong: TargetConfig,
     pub(crate) threshold: f64,
+    pub(crate) max_body_bytes: usize,
     pub(crate) on_failure: FailureMode,
     pub(crate) session_floor: SessionFloor,
 }
@@ -119,6 +123,8 @@ struct RawConfig {
     targets: RawTargets,
     #[serde(default = "default_threshold")]
     threshold: f64,
+    #[serde(default = "default_max_body_bytes")]
+    max_body_bytes: usize,
     #[serde(default)]
     on_failure: FailureMode,
     #[serde(default)]
@@ -162,6 +168,10 @@ fn default_threshold() -> f64 {
     0.5
 }
 
+fn default_max_body_bytes() -> usize {
+    DEFAULT_MAX_BODY_BYTES
+}
+
 fn default_timeout() -> u64 {
     5000
 }
@@ -179,6 +189,11 @@ pub(crate) fn parse(yaml: &serde_yaml::Value) -> Result<RouteConfig, FilterError
     }
     if raw.judge.endpoint.parse::<http::Uri>().is_err() {
         return Err(FilterError::from("judge.endpoint is not a valid URL"));
+    }
+    if raw.max_body_bytes == 0 || raw.max_body_bytes > MAX_JSON_BODY_BYTES {
+        return Err(FilterError::from(format!(
+            "max_body_bytes must be between 1 and {MAX_JSON_BODY_BYTES}"
+        )));
     }
 
     let auth_token = match raw.judge.auth {
@@ -217,6 +232,7 @@ pub(crate) fn parse(yaml: &serde_yaml::Value) -> Result<RouteConfig, FilterError
             model: raw.targets.strong.model,
         },
         threshold: raw.threshold,
+        max_body_bytes: raw.max_body_bytes,
         on_failure: raw.on_failure,
         session_floor: raw.session_floor,
     })
@@ -257,6 +273,7 @@ targets:
         assert_eq!(config.judge.model, "judge-model");
         assert_eq!(config.weak.cluster, "weak-cluster");
         assert!((config.threshold - 0.5).abs() < f64::EPSILON);
+        assert_eq!(config.max_body_bytes, DEFAULT_MAX_BODY_BYTES);
     }
 
     #[test]
@@ -282,6 +299,7 @@ targets:
         yaml["judge"]["verify_tls"] = serde_yaml::Value::Bool(false);
         yaml["on_failure"] = serde_yaml::Value::String("closed".to_owned());
         yaml["session_floor"] = serde_yaml::Value::String("disabled".to_owned());
+        yaml["max_body_bytes"] = serde_yaml::Value::Number(serde_yaml::Number::from(2_097_152_u64));
         let config = parse(&yaml).expect("should parse");
         assert_eq!(
             config.judge.timeout_ms, 250,
@@ -296,6 +314,24 @@ targets:
             matches!(config.session_floor, SessionFloor::Disabled),
             "session_floor: disabled must be honoured"
         );
+        assert_eq!(
+            config.max_body_bytes, 2_097_152,
+            "an explicit body limit overrides the 1 MiB default"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_body_limits() {
+        let above_json_ceiling = u64::try_from(MAX_JSON_BODY_BYTES).expect("the JSON body ceiling fits in u64") + 1;
+        for value in [0_u64, above_json_ceiling] {
+            let mut yaml = valid_yaml();
+            yaml["max_body_bytes"] = serde_yaml::Value::Number(serde_yaml::Number::from(value));
+            let err = parse(&yaml).expect_err("zero and values above the JSON ceiling are invalid");
+            assert!(
+                err.to_string().contains("max_body_bytes must be between 1"),
+                "the error must name the valid body-limit range, got {err}"
+            );
+        }
     }
 
     #[test]
