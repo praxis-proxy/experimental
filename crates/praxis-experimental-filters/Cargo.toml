@@ -33,7 +33,8 @@ tracing = { workspace = true }
 praxis-filter.workspace = true
 praxis-core.workspace = true
 
-# The pingora fork praxis builds on; needed for HttpPeer (judge callout targets).
+# The Pingora fork version used by the pinned ET Praxis AI revision; needed
+# for HttpPeer (judge callout targets) to share Praxis's subrequest types.
 pingora-core = { version = "0.10.0", package = "quixotic-plecostomus-core", features = ["rustls"] }
 
 # NVIDIA NeMo Switchyard (pre-alpha). Pinned exactly to v0.2.0.

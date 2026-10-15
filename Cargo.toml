@@ -25,35 +25,34 @@ hex = "0.4.3"
 url = "2.5.8"
 tempfile = "3.27.0"
 
-# Consume the Praxis AI v0.4.1 release tag. Its unpublished crates are only
-# consumable from Git; Cargo.lock records the tag's resolved commit. Disabling
-# defaults makes the image's capability set explicit in
-# praxis-experimental-server rather than inheriting a changing default.
+# Pin the reviewed Red Hat ET Praxis AI revision that carries the key-auth and
+# metering integrations needed by the single-server deployment. Cargo.lock
+# records the same immutable source for the server and build-support crates.
 [workspace.dependencies.praxis-ai-build-support]
-git = "https://github.com/praxis-proxy/ai"
-tag = "v0.4.1"
+git = "https://github.com/redhat-et/praxis-ai"
+rev = "0b35bf3ebdff0d5d924f8346c917f42440defc1f"
 
 [workspace.dependencies.praxis-ai-proxy]
-git = "https://github.com/praxis-proxy/ai"
-tag = "v0.4.1"
+git = "https://github.com/redhat-et/praxis-ai"
+rev = "0b35bf3ebdff0d5d924f8346c917f42440defc1f"
 default-features = false
 
 # Keep direct core dependencies on the same released source and version used by
 # the pinned AI release so shared Rust types resolve to one package identity.
 [workspace.dependencies.praxis-core]
-version = "0.7.0"
+version = "=0.7.3"
 package = "praxis-proxy-core"
 
 [workspace.dependencies.praxis-filter]
-version = "0.7.0"
+version = "=0.7.3"
 package = "praxis-proxy-filter"
 
 [workspace.dependencies.praxis-protocol]
-version = "0.7.0"
+version = "=0.7.3"
 package = "praxis-proxy-protocol"
 
 [workspace.dependencies.praxis-tls]
-version = "0.7.0"
+version = "=0.7.3"
 package = "praxis-proxy-tls"
 
 [profile.release]

@@ -50,7 +50,7 @@ tracing.workspace = true
 # `[package.metadata.praxis-filters]` marker.
 praxis-experimental-filters = { path = "../praxis-experimental-filters" }
 
-# Praxis core, kept on the released version used by the pinned AI release so
+# Praxis core, kept on the release used by the pinned ET AI revision so
 # `SubRequestClient`, `Config`, and `FilterRegistry` share one Rust type graph.
 # basic-auth-filter is off by default upstream, so a config naming `basic_auth`
 # dies with "unknown filter type". It is the cheap gate for a human-driven client
@@ -75,7 +75,7 @@ praxis-core.workspace = true
 praxis-protocol = { workspace = true, features = ["admin-api"] }
 
 # The stock praxis-ai server. praxis-ai crates are `publish = false`, so this
-# stays a git dependency pinned to its v0.4.1 release tag.
+# stays a git dependency pinned to the reviewed ET source revision.
 #
 # AI now defaults to its smaller `standard` feature set. `full` explicitly
 # preserves the pre-split image surface: OpenAI Responses, Conversations,

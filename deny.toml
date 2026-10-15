@@ -47,9 +47,10 @@ highlight = "all"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# praxis-ai crates are publish = false and only consumable as git dependencies;
-# praxis-experimental-server pins them to a release tag and Cargo.lock records
-# the resolved commit.
-# praxis-proxy/ai: praxis-ai crates are publish = false (git only).
-# Praxis core is consumed from crates.io at the version selected above.
-allow-git = ["https://github.com/praxis-proxy/ai"]
+# The unpublished AI crates come from the reviewed ET fork revision pinned in
+# Cargo.toml and Cargo.lock. Core Praxis remains a crates.io dependency.
+allow-git = [
+  "https://github.com/redhat-et/praxis-ai",
+  # The pinned AI fork uses this pinned SQLx fork for its storage backends.
+  "https://github.com/praxis-proxy/sqlx",
+]
