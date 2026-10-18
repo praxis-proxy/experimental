@@ -321,3 +321,11 @@ failure or selected-target failure goes once to
 A restart with `session_floor: disabled` allows Strong → Weak on the next easy
 turn. Details in
 [`demos/switchyard-route/`](../demos/switchyard-route/README.md).
+
+### PriceTag USD-budget exhaustion
+
+[`demos/switchyard-pricetag/`](../demos/switchyard-pricetag/README.md) is a
+separate local Compose integration demo using real PriceTag and PostgreSQL.
+It proves that an external PriceTag USD-budget denial is a local `429` before
+the selected model is called, and that an explicitly configured router branch
+can make one free-model attempt for that denial.
