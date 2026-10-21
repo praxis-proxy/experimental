@@ -9,11 +9,13 @@
 mod anthropic_lossy_feature_guard;
 mod manual_jwt;
 mod placeholder;
+mod switchyard_failure_target;
 mod switchyard_route;
 
 praxis_filter::export_filters! {
     http "manual_jwt" => manual_jwt::ManualJwtFilter::from_config,
     http "anthropic_lossy_feature_guard" => anthropic_lossy_feature_guard::AnthropicLossyFeatureGuard::from_config,
     http "experimental_placeholder" => placeholder::PlaceholderFilter::from_config,
+    http "switchyard_failure_target" => switchyard_failure_target::SwitchyardFailureTargetFilter::from_config,
     http "switchyard_route" => switchyard_route::SwitchyardRouteFilter::from_config,
 }

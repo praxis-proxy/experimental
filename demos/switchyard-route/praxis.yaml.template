@@ -1,6 +1,6 @@
 # switchyard_route local demo (mocks on 127.0.0.1).
 #
-# gateway :18080 → switchyard_route → judge :18091 / weak :18092 / strong :18093
+# gateway :18080 → iterative_request_router → judge :18091 / tiers :18092-18094
 
 admin:
   address: "127.0.0.1:19901"
@@ -58,11 +58,10 @@ filter_chains:
           - when:
               headers:
                 content-type: "text/event-stream"
+      # IRR buffers complete responses, so streaming requests use the normal
+      # proxy path. This scoped instance ignores non-streaming requests.
       - filter: switchyard_route
-        conditions:
-          - when:
-              path_prefix: "/v1/"
-              methods: [POST]
+        request_scope: streaming
         judge:
           endpoint: "__JUDGE_ENDPOINT__"
           model: "__JUDGE_MODEL__"
@@ -77,25 +76,118 @@ filter_chains:
             model: mock-strong
         on_failure: open
         session_floor: __SESSION_FLOOR__
-      # The backend mocks speak Chat Completions. Keep the public path through
-      # Switchyard, then rewrite it once before the upstream load balancer.
-      - filter: url_rewrite
-        operations:
-          - regex_replace:
-              pattern: "^/v1/(responses|messages)/?$"
-              replacement: "/v1/chat/completions"
-        conditions:
-          - when:
-              path_prefix: "/v1/"
-              methods: [POST]
-      - filter: load_balancer
-        clusters:
-          - name: weak-cluster
-            endpoints:
-              - "127.0.0.1:18092"
-          - name: strong-cluster
-            endpoints:
-              - "127.0.0.1:18093"
+        # This outer filter sees buffered bodies before IRR; match the primary limit.
+        max_body_bytes: 1200000
+        # A successful streaming selection enters the direct proxy branch and
+        # terminates the parent chain before it reaches IRR.
+        branch_chains:
+          - name: streaming_direct
+            on_result:
+              filter: switchyard_route
+              result: selected
+            rejoin: terminal
+            chains:
+              - name: streaming_upstream
+                filters:
+                  - filter: url_rewrite
+                    operations:
+                      - regex_replace:
+                          pattern: "^/v1/(responses|messages)/?$"
+                          replacement: "/v1/chat/completions"
+                  - filter: load_balancer
+                    clusters:
+                      - name: weak-cluster
+                        endpoints:
+                          - "127.0.0.1:18092"
+                      - name: strong-cluster
+                        endpoints:
+                          - "127.0.0.1:18093"
+      # Buffered requests can use the bounded primary → failure workflow.
+      # Keep IRR last because it returns the terminal response itself.
+      - filter: iterative_request_router
+        initial_step: primary
+        max_iterations: 2
+        steps:
+          - name: primary
+            filters:
+              - filter: switchyard_route
+                judge:
+                  endpoint: "__JUDGE_ENDPOINT__"
+                  model: "__JUDGE_MODEL__"
+                  timeout_ms: 10000
+                threshold: 0.8
+                targets:
+                  weak:
+                    cluster: weak-cluster
+                    model: mock-weak
+                  strong:
+                    cluster: strong-cluster
+                    model: mock-strong
+                # `both` overrides this open policy only for judge failures;
+                # target failures are selected by the IRR rules below.
+                on_failure: open
+                failure_scope: both
+                session_floor: __SESSION_FLOOR__
+                # Exercise fallback replay above the default 1 MiB limit.
+                max_body_bytes: 1200000
+              # The backend mocks speak Chat Completions. Keep the public path
+              # through Switchyard, then rewrite it before load balancing.
+              - filter: url_rewrite
+                operations:
+                  - regex_replace:
+                      pattern: "^/v1/(responses|messages)/?$"
+                      replacement: "/v1/chat/completions"
+              - filter: load_balancer
+                clusters:
+                  - name: weak-cluster
+                    endpoints:
+                      - "127.0.0.1:18092"
+                  - name: strong-cluster
+                    endpoints:
+                      - "127.0.0.1:18093"
+            on_result:
+              - origin: local
+                status: [503]
+                next: failure
+              - origin: transport
+                next: failure
+              - origin: upstream
+                status: [500, 502, 503, 504]
+                next: failure
+              - default: true
+                done: true
+          - name: failure
+            filters:
+              - filter: switchyard_failure_target
+                cluster: failure-cluster
+                model: mock-failure
+              # IRR steps do not inherit headers; configure the failure target
+              # representation and credentials independently.
+              - filter: headers
+                request_set:
+                  - name: Content-Type
+                    value: application/json
+                  - name: Accept
+                    value: application/json
+              - filter: credential_injection
+                clusters:
+                  - name: failure-cluster
+                    header: Authorization
+                    env_var: SWITCHYARD_FAILURE_API_KEY
+                    header_prefix: "Bearer "
+              - filter: url_rewrite
+                operations:
+                  - regex_replace:
+                      pattern: "^/v1/(responses|messages)/?$"
+                      replacement: "/v1/chat/completions"
+              - filter: load_balancer
+                clusters:
+                  - name: failure-cluster
+                    endpoints:
+                      - "127.0.0.1:18094"
+            on_result:
+              - default: true
+                done: true
 
 # Loopback-only demo; allow_root for UID 0 CI/container shells.
 insecure_options:
