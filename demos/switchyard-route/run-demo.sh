@@ -12,6 +12,8 @@ export CARGO_TARGET_DIR="${REPO_ROOT}/target"
 SERVER_BIN="${CARGO_TARGET_DIR}/debug/praxis-experimental-server"
 JUDGE_ENDPOINT="${JUDGE_ENDPOINT:-http://127.0.0.1:18091/v1/chat/completions}"
 JUDGE_MODEL="${JUDGE_MODEL:-mock-switchyard-judge}"
+# Credential for the IRR failure target and its mock upstream.
+export SWITCHYARD_FAILURE_API_KEY="${SWITCHYARD_FAILURE_API_KEY:-demo-failure-key}"
 MOCKS_PID=""
 SERVER_PID=""
 SERVER_LOG=/tmp/switchyard-demo-server.log
@@ -87,7 +89,7 @@ stop_server() {
   exit 1
 }
 
-echo "mode: local mocks (judge :18091, weak :18092, strong :18093)" >&2
+echo "mode: local mocks (judge :18091, weak :18092, strong :18093, failure :18094)" >&2
 python3 upstreams.py > "$MOCKS_LOG" 2>&1 &
 MOCKS_PID=$!
 sleep 0.3
@@ -260,25 +262,53 @@ error_smoke() {
   responses=$(curl -sS -m 60 -w $'\n%{http_code}' -X POST http://127.0.0.1:18080/v1/responses \
     -H 'content-type: application/json' -d '{"model":"agent-default","input":"error smoke"}')
   status=${responses##*$'\n'}
-  [[ "$status" == 503 ]]
-  grep -q 'server_error' <<<"$responses"
+  [[ "$status" == 200 ]]
+  grep -q 'served_by=failure-upstream' <<<"$responses"
 
   anthropic=$(curl -sS -m 60 -w $'\n%{http_code}' -X POST http://127.0.0.1:18080/v1/messages \
     -H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' \
     -d '{"model":"agent-default","max_tokens":8,"messages":[{"role":"user","content":"error smoke"}]}' )
   status=${anthropic##*$'\n'}
+  [[ "$status" == 200 ]]
+  grep -q 'served_by=failure-upstream' <<<"$anthropic"
+
+  curl -sS -m 5 -X POST http://127.0.0.1:18091/control/failure-upstream/down >/dev/null
+  responses=$(curl -sS -m 60 -w $'\n%{http_code}' -X POST http://127.0.0.1:18080/v1/responses \
+    -H 'content-type: application/json' -d '{"model":"agent-default","input":"final failure smoke"}')
+  status=${responses##*$'\n'}
   [[ "$status" == 503 ]]
-  grep -q 'api_error' <<<"$anthropic"
+  grep -q 'server_error' <<<"$responses"
+
+  curl -sS -m 5 -X POST http://127.0.0.1:18091/control/failure-upstream/up >/dev/null
   curl -sS -m 5 -X POST http://127.0.0.1:18091/control/weak-upstream/up >/dev/null
-  echo "error smoke: protocol-specific upstream errors preserved"
+  echo "error smoke: selected-target fallback and final failure are bounded"
+}
+
+large_body_fallback_smoke() {
+  local body content response status tmp
+  content=$(head -c 1100000 /dev/zero | tr '\0' x)
+  printf -v body '{"model":"agent-default","messages":[{"role":"user","content":"%s"}]}' "$content"
+  tmp=$(mktemp)
+  printf '%s' "$body" > "$tmp"
+
+  curl -sS -m 5 -X POST http://127.0.0.1:18091/control/weak-upstream/down >/dev/null
+  response=$(curl -sS -m 60 -w $'\n%{http_code}' -X POST http://127.0.0.1:18080/v1/chat/completions \
+    -H 'content-type: application/json' --data-binary "@$tmp")
+  rm -f "$tmp"
+  status=${response##*$'\n'}
+  [[ "$status" == 200 ]]
+  grep -q 'served_by=failure-upstream' <<<"$response"
+  curl -sS -m 5 -X POST http://127.0.0.1:18091/control/weak-upstream/up >/dev/null
+  echo "large-body fallback smoke: 1.1 MiB replay reached the failure target"
 }
 
 stream_smoke
 fragmented_stream_smoke
 error_smoke
+large_body_fallback_smoke
 
 ask() {
-  local label=$1 prompt=$2 session=${3:-} expected_upstream=${4:-}
+  local label=$1 prompt=$2 session=${3:-} expected_upstream=${4:-} expected_status=${5:-200}
   local tmp body http curl_args
   tmp=$(mktemp)
   body=$(PROMPT="$prompt" python3 - <<'PY'
@@ -307,6 +337,11 @@ PY
     echo
   else
     echo "(empty body — see server.log)"
+  fi
+  if [[ "$http" != "$expected_status" ]]; then
+    echo "${label} expected HTTP ${expected_status}, got ${http}" >&2
+    rm -f "$tmp"
+    return 1
   fi
   if [[ -n "$expected_upstream" ]] \
     && ! grep -qF "served_by=${expected_upstream}" "$tmp"; then
@@ -363,12 +398,16 @@ echo "logs:"
 print_route_logs 1
 print_judge_preview 'Thanks, just say ok.'
 
-echo "=== mid-session judge down (expect reuse Weak, then default Strong) ==="
-ask reuse-weak-seed 'Count to four.' demo-reuse-weak
+echo "=== failure target: judge down ==="
+judge_refusals_before=$(grep -cF '[judge] refusing (down)' "$MOCKS_LOG" || true)
 set_judge down
-ask reuse-weak-after 'What is 2+2?' demo-reuse-weak
-ask empty-store-while-down 'What is the capital of France?' demo-empty-store
+ask judge-down 'What is 2+2?' '' failure-upstream
 set_judge up
+judge_refusals_after=$(grep -cF '[judge] refusing (down)' "$MOCKS_LOG" || true)
+if [[ "$((judge_refusals_after - judge_refusals_before))" -ne 1 ]]; then
+  echo "judge-down expected exactly one judge attempt" >&2
+  exit 1
+fi
 
 echo "=== session_floor disabled (restart; expect Strong then Weak on the same session) ==="
 stop_server
@@ -384,10 +423,10 @@ grep -E 'switchyard_route: (judge verdict|routed|floor_skip|reuse|default_strong
   "$SERVER_LOG" || true
 echo
 echo "upstreams:"
-grep -nE 'weak-upstream|strong-upstream' "$MOCKS_LOG" || true
+grep -nE 'weak-upstream|strong-upstream|failure-upstream' "$MOCKS_LOG" || true
 
 missing=0
-for token in floor_skip reuse default_strong; do
+for token in floor_skip; do
   if ! grep -q "switchyard_route: ${token}" "$SERVER_LOG"; then
     echo "missing expected log: switchyard_route: ${token}" >&2
     missing=1

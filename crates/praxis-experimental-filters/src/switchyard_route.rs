@@ -34,7 +34,7 @@ use tracing::{debug, warn};
 
 #[cfg(test)]
 use self::config::DEFAULT_MAX_BODY_BYTES;
-use self::config::{RouteConfig, SessionFloor, Tier};
+use self::config::{FailureMode, RouteConfig, SessionFloor, Tier};
 
 /// Metadata key for the chosen cluster (body phase → `on_request`).
 const METADATA_CLUSTER: &str = "switchyard_route.cluster";
@@ -59,6 +59,15 @@ const ANTHROPIC_TRANSLATED_MODEL: &str = "anthropic_messages_to_chat_completions
 
 /// Streaming fact extracted by the stock Anthropic translator.
 const ANTHROPIC_TRANSLATED_STREAMING: &str = "anthropic_messages_to_chat_completions.streaming";
+
+/// Verified protocol translation retained across IRR steps.
+#[derive(Clone, Copy)]
+enum TranslationProof {
+    /// Responses translated to Chat Completions.
+    Responses,
+    /// Anthropic Messages translated to Chat Completions.
+    Anthropic,
+}
 
 /// Maximum judge-response body size (1 MiB).
 const MAX_JUDGE_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -102,14 +111,23 @@ impl SwitchyardRouteFilter {
     ///
     /// When `session_floor` is enabled and the session is already at Strong,
     /// the judge is skipped entirely (the outcome would be Strong regardless).
-    async fn route(&self, ctx: &mut HttpFilterContext<'_>, body: &mut Option<Bytes>) -> Result<Tier, RouteError> {
+    async fn route(
+        &self,
+        ctx: &mut HttpFilterContext<'_>,
+        body: &mut Option<Bytes>,
+    ) -> Result<Option<Tier>, RouteError> {
         let value = parse_body(body.as_ref())?;
+        let path = ctx.request.uri.path().to_owned();
+        capture_translation_proof(ctx, &path);
+
+        if !self.config.request_scope.includes(&value) {
+            return Ok(None);
+        }
 
         // Upstream translators normalize Responses and Anthropic bodies to Chat
         // before this phase. Keep their public path visible so downstream
         // response translators can restore the original client protocol.
-        let path = ctx.request.uri.path();
-        if !is_supported_inference_path(path) || !has_translation_evidence(ctx, path) {
+        if !is_supported_inference_path(&path) || !has_translation_evidence(ctx, &path) {
             return Err(RouteError::UnsupportedPath);
         }
 
@@ -126,7 +144,7 @@ impl SwitchyardRouteFilter {
                 ctx.set_metadata(METADATA_CLUSTER, cluster);
                 ctx.set_metadata(METADATA_DECISION, failure::DECISION_FLOOR_SKIP);
                 debug!(tier = %floor.tag(), "switchyard_route: floor_skip");
-                return Ok(floor);
+                return Ok(Some(floor));
             }
         }
 
@@ -144,7 +162,7 @@ impl SwitchyardRouteFilter {
             self.lock_sessions()
                 .remember(&key, tier, Instant::now(), self.config.session_floor);
         }
-        Ok(tier)
+        Ok(Some(tier))
     }
 
     /// Recovers from a poisoned mutex so one panicked request cannot stick the filter.
@@ -152,7 +170,7 @@ impl SwitchyardRouteFilter {
         self.sessions.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Records the error and applies `on_failure` (reuse / default Strong / 503 / unrouted).
+    /// Records the error and applies scope-aware failure policy.
     fn on_route_error(
         &self,
         ctx: &mut HttpFilterContext<'_>,
@@ -167,7 +185,12 @@ impl SwitchyardRouteFilter {
             let key = session::session_key_from_request(&ctx.request.headers, value)?;
             self.lock_sessions().last_success(&key, Instant::now())
         });
-        match failure::failure_action(self.config.on_failure, may_apply, remembered) {
+        let mode = if self.config.failure_scope.handles_judge() && err.is_judge_failure() {
+            FailureMode::Closed
+        } else {
+            self.config.on_failure
+        };
+        match failure::failure_action(mode, may_apply, remembered) {
             failure::FailureAction::Reject => reject_closed(ctx),
             failure::FailureAction::Unrouted => fail_open_unrouted(ctx),
             failure::FailureAction::Apply(apply) => match parsed {
@@ -405,10 +428,13 @@ impl HttpFilter for SwitchyardRouteFilter {
     }
 
     fn selects_cluster(&self) -> bool {
-        true
+        self.config.request_scope == config::RequestScope::All
     }
 
     fn selected_clusters(&self) -> Vec<String> {
+        if self.config.request_scope != config::RequestScope::All {
+            return Vec::new();
+        }
         vec![self.config.weak.cluster.clone(), self.config.strong.cluster.clone()]
     }
 
@@ -440,6 +466,10 @@ impl HttpFilter for SwitchyardRouteFilter {
     async fn on_request(&self, ctx: &mut HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
         if let Some(cluster) = ctx.get_metadata(METADATA_CLUSTER) {
             ctx.cluster = Some(cluster.into());
+            ctx.filter_results
+                .entry("switchyard_route")
+                .or_default()
+                .set("status", "selected")?;
         }
         Ok(FilterAction::Continue)
     }
@@ -630,7 +660,7 @@ fn has_translation_evidence(ctx: &HttpFilterContext<'_>, path: &str) -> bool {
     if is_chat_completions_path(path) {
         return true;
     }
-    match path {
+    let direct_proof = match path {
         "/v1/responses" => {
             ctx.get_metadata(RESPONSES_FORMAT) == Some("openai_responses")
                 && ctx.get_metadata(RESPONSES_TRANSLATION_ARMED) == Some("true")
@@ -641,7 +671,40 @@ fn has_translation_evidence(ctx: &HttpFilterContext<'_>, path: &str) -> bool {
                 && ctx.get_metadata(ANTHROPIC_TRANSLATED_STREAMING).is_some()
         },
         _ => false,
+    };
+    direct_proof || extension_proves_translation(ctx, path)
+}
+
+/// Retain verified translation evidence before IRR resets step metadata.
+fn capture_translation_proof(ctx: &mut HttpFilterContext<'_>, path: &str) {
+    let path = path.strip_suffix('/').unwrap_or(path);
+    let proof = match path {
+        "/v1/responses"
+            if ctx.get_metadata(RESPONSES_FORMAT) == Some("openai_responses")
+                && ctx.get_metadata(RESPONSES_TRANSLATION_ARMED) == Some("true") =>
+        {
+            Some(TranslationProof::Responses)
+        },
+        "/v1/messages"
+            if ctx.get_metadata(ANTHROPIC_FORMAT) == Some("anthropic_messages")
+                && ctx.get_metadata(ANTHROPIC_TRANSLATED_MODEL).is_some()
+                && ctx.get_metadata(ANTHROPIC_TRANSLATED_STREAMING).is_some() =>
+        {
+            Some(TranslationProof::Anthropic)
+        },
+        _ => None,
+    };
+    if let Some(proof) = proof {
+        ctx.extensions.insert(proof);
     }
+}
+
+/// Validate retained translation evidence against the public URI.
+fn extension_proves_translation(ctx: &HttpFilterContext<'_>, path: &str) -> bool {
+    matches!(
+        (path, ctx.extensions.get::<TranslationProof>()),
+        ("/v1/responses", Some(TranslationProof::Responses)) | ("/v1/messages", Some(TranslationProof::Anthropic))
+    )
 }
 
 /// Parses the buffered body as JSON.
@@ -757,6 +820,14 @@ enum RouteError {
 }
 
 impl RouteError {
+    /// Whether this error came from executing or interpreting the judge.
+    fn is_judge_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::MissingSubrequestClient | Self::Judge(_) | Self::Run(_) | Self::NoDecision | Self::UnknownTier(_)
+        )
+    }
+
     /// Whether this failure is a chat request we may rewrite to a fallback tier.
     fn may_apply_failure_tier(&self) -> bool {
         match self {
@@ -957,6 +1028,13 @@ mod tests {
         serde_yaml::from_str(&yaml).expect("test config YAML parses")
     }
 
+    /// Builds filter YAML with an explicit failure scope.
+    fn config_yaml_with_scope(endpoint: &str, on_failure: &str, scope: &str) -> serde_yaml::Value {
+        let mut yaml = config_yaml(endpoint, on_failure);
+        yaml["failure_scope"] = serde_yaml::Value::String(scope.to_owned());
+        yaml
+    }
+
     /// Builds a filter whose judge lives at `endpoint`.
     fn make_filter(endpoint: &str, on_failure: &str) -> Box<dyn HttpFilter> {
         SwitchyardRouteFilter::from_config(&config_yaml(endpoint, on_failure)).expect("test filter config is valid")
@@ -966,6 +1044,19 @@ mod tests {
     fn make_filter_with_body_limit(endpoint: &str, on_failure: &str, max_body_bytes: usize) -> Box<dyn HttpFilter> {
         SwitchyardRouteFilter::from_config(&config_yaml_with_body_limit(endpoint, on_failure, max_body_bytes))
             .expect("test filter config is valid")
+    }
+
+    /// Builds a filter with an explicit failure scope.
+    fn make_filter_with_scope(endpoint: &str, on_failure: &str, scope: &str) -> Box<dyn HttpFilter> {
+        SwitchyardRouteFilter::from_config(&config_yaml_with_scope(endpoint, on_failure, scope))
+            .expect("test filter config is valid")
+    }
+
+    /// Builds a filter that only handles normalized streaming requests.
+    fn make_streaming_filter(endpoint: &str, on_failure: &str) -> Box<dyn HttpFilter> {
+        let mut yaml = config_yaml(endpoint, on_failure);
+        yaml["request_scope"] = serde_yaml::Value::String("streaming".to_owned());
+        SwitchyardRouteFilter::from_config(&yaml).expect("test filter config is valid")
     }
 
     /// Builds a filter with an explicit `session_floor` setting.
@@ -1346,6 +1437,19 @@ mod tests {
                 }
             ),
             "the configured Switchyard limit must participate in pipeline buffering"
+        );
+    }
+
+    #[test]
+    fn streaming_scope_defers_cluster_binding_to_its_branch() {
+        let filter = make_streaming_filter("http://127.0.0.1:1/v1/chat/completions", "open");
+        assert!(
+            !filter.selects_cluster(),
+            "the scoped instance is bound by its terminal streaming branch"
+        );
+        assert!(
+            filter.selected_clusters().is_empty(),
+            "top-level validation must not expect the branch's load balancer"
         );
     }
 
@@ -1748,10 +1852,11 @@ mod tests {
             has_translation_evidence(&responses_ctx, responses.uri.path()),
             "matching Responses classification plus armed marker proves normalization"
         );
+        capture_translation_proof(&mut responses_ctx, responses.uri.path());
         responses_ctx.set_metadata(RESPONSES_FORMAT, "openai_chat_completions");
         assert!(
-            !has_translation_evidence(&responses_ctx, responses.uri.path()),
-            "the armed marker cannot override a mismatched source classification"
+            has_translation_evidence(&responses_ctx, responses.uri.path()),
+            "the retained proof survives the fresh metadata map used by an IRR step"
         );
 
         let messages = make_request("/v1/messages");
@@ -1767,10 +1872,11 @@ mod tests {
             has_translation_evidence(&messages_ctx, messages.uri.path()),
             "matching Anthropic classification and translator facts prove normalization"
         );
+        capture_translation_proof(&mut messages_ctx, messages.uri.path());
         messages_ctx.set_metadata(ANTHROPIC_FORMAT, "openai_responses");
         assert!(
-            !has_translation_evidence(&messages_ctx, messages.uri.path()),
-            "translator facts cannot override a mismatched source classification"
+            has_translation_evidence(&messages_ctx, messages.uri.path()),
+            "the retained proof is tied to the public Messages path"
         );
 
         let chat = make_request("/v1/chat/completions");
@@ -1971,6 +2077,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn streaming_scope_ignores_non_streaming_requests() {
+        let filter = make_streaming_filter("http://127.0.0.1:1/v1/chat/completions", "closed");
+        let request = make_request("/v1/chat/completions");
+        let mut ctx = make_ctx(&request, None);
+        let original = chat_body("hello");
+        let mut body = Some(original.clone());
+
+        let action = filter
+            .on_request_body(&mut ctx, &mut body, true)
+            .await
+            .expect("an out-of-scope request is not a routing failure");
+
+        assert!(matches!(action, FilterAction::Continue));
+        assert_eq!(body, Some(original), "an ignored request remains unchanged");
+        assert!(ctx.get_metadata(METADATA_CLUSTER).is_none());
+        assert!(ctx.get_metadata(METADATA_ERROR).is_none());
+    }
+
+    #[tokio::test]
     async fn fails_open_when_routing_fails() {
         // No subrequest client in the context, so the judge can never be called.
         let filter = make_filter("http://127.0.0.1:1/v1/chat/completions", "open");
@@ -1992,6 +2117,39 @@ mod tests {
             Some("subrequest client unavailable"),
             "the failure reason must be recorded for access logs"
         );
+    }
+
+    #[tokio::test]
+    async fn judge_scope_overrides_open_for_judge_failures() {
+        for scope in ["judge", "both"] {
+            let filter = make_filter_with_scope("http://127.0.0.1:1/v1/chat/completions", "open", scope);
+            let request = make_request("/v1/chat/completions");
+            let mut ctx = make_ctx(&request, None);
+            let mut body = Some(chat_body("hello"));
+
+            let action = filter
+                .on_request_body(&mut ctx, &mut body, true)
+                .await
+                .expect("scoped judge failure rejects through FilterAction");
+
+            assert!(matches!(action, FilterAction::Reject(rejection) if rejection.status == 503));
+        }
+    }
+
+    #[tokio::test]
+    async fn target_scope_preserves_open_for_judge_failures() {
+        let filter = make_filter_with_scope("http://127.0.0.1:1/v1/chat/completions", "open", "target");
+        let request = make_request("/v1/chat/completions");
+        let mut ctx = make_ctx(&request, None);
+        let mut body = Some(chat_body("hello"));
+
+        let action = filter
+            .on_request_body(&mut ctx, &mut body, true)
+            .await
+            .expect("target-only scope preserves open judge handling");
+
+        assert!(matches!(action, FilterAction::Continue));
+        assert_eq!(ctx.get_metadata(METADATA_DECISION), Some("default_strong"));
     }
 
     #[tokio::test]
@@ -2107,6 +2265,13 @@ mod tests {
             ctx.cluster_name(),
             Some("strong-cluster"),
             "the body-phase decision must select the cluster"
+        );
+        assert_eq!(
+            ctx.filter_results
+                .get("switchyard_route")
+                .and_then(|results| results.get("status")),
+            Some("selected"),
+            "a terminal streaming branch can consume the selection result"
         );
     }
 
@@ -2281,6 +2446,8 @@ mod tests {
             RouteError::MissingSubrequestClient.may_apply_failure_tier(),
             "no callout client is treated like an unreachable judge"
         );
+        assert!(RouteError::Judge("down".into()).is_judge_failure());
+        assert!(!RouteError::Translation("bad request".into()).is_judge_failure());
     }
 
     #[test]

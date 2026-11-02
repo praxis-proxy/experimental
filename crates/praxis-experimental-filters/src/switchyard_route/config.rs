@@ -25,6 +25,8 @@ pub(crate) struct RouteConfig {
     pub(crate) threshold: f64,
     pub(crate) max_body_bytes: usize,
     pub(crate) on_failure: FailureMode,
+    pub(crate) failure_scope: FailureScope,
+    pub(crate) request_scope: RequestScope,
     pub(crate) session_floor: SessionFloor,
 }
 
@@ -77,6 +79,44 @@ pub(crate) enum FailureMode {
     Closed,
 }
 
+/// Failure classes that may activate the separately configured fallback step.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum FailureScope {
+    /// Keep the legacy judge-failure policy; IRR may handle target failures.
+    #[default]
+    Target,
+    /// Route judge failures to the fallback step; do not imply target failover.
+    Judge,
+    /// Route both judge and selected-target failures to the fallback step.
+    Both,
+}
+
+impl FailureScope {
+    /// Returns whether judge failures take precedence over `on_failure`.
+    pub(crate) fn handles_judge(self) -> bool {
+        matches!(self, Self::Judge | Self::Both)
+    }
+}
+
+/// Requests on which this filter instance performs a routing decision.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RequestScope {
+    /// Route every supported inference request.
+    #[default]
+    All,
+    /// Route only requests whose normalized JSON body contains `stream: true`.
+    Streaming,
+}
+
+impl RequestScope {
+    /// Returns whether this instance should route the normalized request body.
+    pub(crate) fn includes(self, body: &serde_json::Value) -> bool {
+        self == Self::All || body.get("stream").and_then(serde_json::Value::as_bool) == Some(true)
+    }
+}
+
 /// Whether to enforce a session floor that prevents tier downgrades.
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -127,6 +167,10 @@ struct RawConfig {
     max_body_bytes: usize,
     #[serde(default)]
     on_failure: FailureMode,
+    #[serde(default)]
+    failure_scope: FailureScope,
+    #[serde(default)]
+    request_scope: RequestScope,
     #[serde(default)]
     session_floor: SessionFloor,
 }
@@ -234,6 +278,8 @@ pub(crate) fn parse(yaml: &serde_yaml::Value) -> Result<RouteConfig, FilterError
         threshold: raw.threshold,
         max_body_bytes: raw.max_body_bytes,
         on_failure: raw.on_failure,
+        failure_scope: raw.failure_scope,
+        request_scope: raw.request_scope,
         session_floor: raw.session_floor,
     })
 }
@@ -286,6 +332,8 @@ targets:
             matches!(config.on_failure, FailureMode::Open),
             "routing failures default to passing traffic through"
         );
+        assert_eq!(config.failure_scope, FailureScope::Target);
+        assert_eq!(config.request_scope, RequestScope::All);
         assert!(
             matches!(config.session_floor, SessionFloor::Enabled),
             "session floor defaults to enabled"
@@ -298,6 +346,8 @@ targets:
         yaml["judge"]["timeout_ms"] = serde_yaml::Value::Number(serde_yaml::Number::from(250));
         yaml["judge"]["verify_tls"] = serde_yaml::Value::Bool(false);
         yaml["on_failure"] = serde_yaml::Value::String("closed".to_owned());
+        yaml["failure_scope"] = serde_yaml::Value::String("both".to_owned());
+        yaml["request_scope"] = serde_yaml::Value::String("streaming".to_owned());
         yaml["session_floor"] = serde_yaml::Value::String("disabled".to_owned());
         yaml["max_body_bytes"] = serde_yaml::Value::Number(serde_yaml::Number::from(2_097_152_u64));
         let config = parse(&yaml).expect("should parse");
@@ -310,6 +360,8 @@ targets:
             matches!(config.on_failure, FailureMode::Closed),
             "on_failure: closed must be honoured"
         );
+        assert_eq!(config.failure_scope, FailureScope::Both);
+        assert_eq!(config.request_scope, RequestScope::Streaming);
         assert!(
             matches!(config.session_floor, SessionFloor::Disabled),
             "session_floor: disabled must be honoured"
