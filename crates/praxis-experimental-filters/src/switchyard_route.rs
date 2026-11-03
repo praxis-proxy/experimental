@@ -45,6 +45,18 @@ const METADATA_DECISION: &str = "switchyard_route.decision";
 /// Truncated routing error; set on every judge/decode failure.
 const METADATA_ERROR: &str = "switchyard_route.error";
 
+/// Name used for Switchyard results consumed by branch chains and IRR.
+const FILTER_RESULT_NAME: &str = "switchyard_route";
+
+/// Key shared by the result values emitted by Switchyard.
+const FILTER_RESULT_STATUS: &str = "status";
+
+/// Result emitted after Switchyard selects a Weak or Strong cluster.
+const FILTER_RESULT_SELECTED: &str = "selected";
+
+/// Result emitted when a configured judge failure becomes a local rejection.
+const FILTER_RESULT_JUDGE_FAILED: &str = "judge_failed";
+
 /// Format classified by the stock Responses boundary filter.
 const RESPONSES_FORMAT: &str = "openai_responses_format.format";
 
@@ -176,7 +188,7 @@ impl SwitchyardRouteFilter {
         ctx: &mut HttpFilterContext<'_>,
         body: &mut Option<Bytes>,
         err: &RouteError,
-    ) -> FilterAction {
+    ) -> Result<FilterAction, FilterError> {
         warn!(error = %err, "switchyard_route: routing failed");
         record_error_metadata(ctx, err);
         let may_apply = err.may_apply_failure_tier();
@@ -185,19 +197,23 @@ impl SwitchyardRouteFilter {
             let key = session::session_key_from_request(&ctx.request.headers, value)?;
             self.lock_sessions().last_success(&key, Instant::now())
         });
-        let mode = if self.config.failure_scope.handles_judge() && err.is_judge_failure() {
+        let judge_failure = self.config.failure_scope.handles_judge() && err.is_judge_failure();
+        if judge_failure {
+            record_filter_status(ctx, FILTER_RESULT_JUDGE_FAILED)?;
+        }
+        let mode = if judge_failure {
             FailureMode::Closed
         } else {
             self.config.on_failure
         };
-        match failure::failure_action(mode, may_apply, remembered) {
+        Ok(match failure::failure_action(mode, may_apply, remembered) {
             failure::FailureAction::Reject => reject_closed(ctx),
             failure::FailureAction::Unrouted => fail_open_unrouted(ctx),
             failure::FailureAction::Apply(apply) => match parsed {
                 Some(value) => self.apply_failure_tier(ctx, body, apply, value),
                 None => unreachable!("Apply requires a successfully parsed request body"),
             },
-        }
+        })
     }
 
     /// Rewrites `model` and cluster metadata for an `open` failure apply.
@@ -459,17 +475,14 @@ impl HttpFilter for SwitchyardRouteFilter {
 
         match self.route(ctx, body).await {
             Ok(_) => Ok(FilterAction::Continue),
-            Err(err) => Ok(self.on_route_error(ctx, body, &err)),
+            Err(err) => self.on_route_error(ctx, body, &err),
         }
     }
 
     async fn on_request(&self, ctx: &mut HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
         if let Some(cluster) = ctx.get_metadata(METADATA_CLUSTER) {
             ctx.cluster = Some(cluster.into());
-            ctx.filter_results
-                .entry("switchyard_route")
-                .or_default()
-                .set("status", "selected")?;
+            record_filter_status(ctx, FILTER_RESULT_SELECTED)?;
         }
         Ok(FilterAction::Continue)
     }
@@ -747,6 +760,15 @@ fn rewrite_for_tier(
 fn record_error_metadata(ctx: &mut HttpFilterContext<'_>, err: &RouteError) {
     let short: String = err.to_string().chars().take(250).collect();
     ctx.set_metadata(METADATA_ERROR, short);
+}
+
+/// Publish a Switchyard status for routing compositions.
+fn record_filter_status(ctx: &mut HttpFilterContext<'_>, status: &'static str) -> Result<(), FilterError> {
+    ctx.filter_results
+        .entry(FILTER_RESULT_NAME)
+        .or_default()
+        .set(FILTER_RESULT_STATUS, status)?;
+    Ok(())
 }
 
 /// HTTP 503 for `on_failure: closed`.
@@ -2133,6 +2155,13 @@ mod tests {
                 .expect("scoped judge failure rejects through FilterAction");
 
             assert!(matches!(action, FilterAction::Reject(rejection) if rejection.status == 503));
+            assert_eq!(
+                ctx.filter_results
+                    .get(FILTER_RESULT_NAME)
+                    .and_then(|results| results.get(FILTER_RESULT_STATUS)),
+                Some(FILTER_RESULT_JUDGE_FAILED),
+                "IRR must be able to distinguish a judge rejection from other local 503s"
+            );
         }
     }
 
@@ -2150,6 +2179,10 @@ mod tests {
 
         assert!(matches!(action, FilterAction::Continue));
         assert_eq!(ctx.get_metadata(METADATA_DECISION), Some("default_strong"));
+        assert!(
+            !ctx.filter_results.contains_key(FILTER_RESULT_NAME),
+            "a judge failure outside the configured scope must not advertise judge_failed"
+        );
     }
 
     #[tokio::test]
@@ -2268,9 +2301,9 @@ mod tests {
         );
         assert_eq!(
             ctx.filter_results
-                .get("switchyard_route")
-                .and_then(|results| results.get("status")),
-            Some("selected"),
+                .get(FILTER_RESULT_NAME)
+                .and_then(|results| results.get(FILTER_RESULT_STATUS)),
+            Some(FILTER_RESULT_SELECTED),
             "a terminal streaming branch can consume the selection result"
         );
     }
