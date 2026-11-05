@@ -126,6 +126,9 @@ the bounded orchestration:
 - filter: iterative_request_router
   initial_step: primary
   max_iterations: 2
+  timeout_ms: 5000
+  step_timeout_ms: 1000
+  max_response_bytes: 1048576
   steps:
     - name: primary
       filters:
@@ -141,10 +144,26 @@ the bounded orchestration:
         - filter: load_balancer
           # Weak and Strong clusters
       on_result:
-        - origin: local
+        - filter: switchyard_route
+          key: status
+          value: judge_failed
+          origin: local
           status: [503]
           next: failure
         - origin: transport
+          transport_error: admission_timeout
+          next: failure
+        - origin: transport
+          transport_error: circuit_open
+          next: failure
+        - origin: transport
+          transport_error: connect
+          next: failure
+        - origin: transport
+          transport_error: io
+          next: failure
+        - origin: transport
+          transport_error: deadline_exceeded
           next: failure
         - origin: upstream
           status: [500, 502, 503, 504]
@@ -181,11 +200,20 @@ the bounded orchestration:
           done: true
 ```
 
+The demo allows five seconds for the whole router exchange and one second for
+each step. Its judge timeout is 750ms, so a slow judge can produce
+`judge_failed` before the primary-step timeout; a selected-target timeout may
+also transition to the failure target.
+Each step buffers at most one MiB of response data; an oversized response
+returns 502 and does not transition to the failure target.
+
 `max_iterations: 2` means primary plus one failure-target attempt. The failure
 step has no transition to another step, so a failure-target error cannot create
 a third attempt. `origin: upstream` excludes locally generated errors such as
 the token-limit 429; status matching also excludes client errors and other
-4xx responses. A response that has already exposed headers/body is not replaced.
+4xx responses. Transport transitions cover admission timeout, open circuit,
+connection/I/O failures, and deadline expiry. A response that has already
+exposed headers/body is not replaced.
 
 The request body is buffered by the router and replayed to the failure step.
 IRR steps do not inherit headers, so each target configures its own
@@ -223,6 +251,8 @@ maps are separate.
 | `both` | Produces local 503 instead of applying `on_failure`. | Not controlled by this field. |
 
 `failure_scope` controls only judge-side behavior inside `switchyard_route`.
+When such a failure becomes a local 503, the filter emits
+`switchyard_route.status=judge_failed`; the IRR transition requires both.
 The selected-target side is controlled entirely by the primary step's IRR
 `on_result` rules. For judge-only fallback, include only the local-503
 transition. For target-only fallback, keep `failure_scope: target` and include

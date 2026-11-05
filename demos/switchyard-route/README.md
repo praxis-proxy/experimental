@@ -97,10 +97,16 @@ Hard prompts include markers such as `undocumented`, `blurry`, `whiteboard`
 YAML, `0.95` routes weak and `0.0` routes strong.
 
 The buffered primary step uses `on_failure: open` with `failure_scope: both`.
-The scope changes judge failures into a local 503 that IRR can transition from;
-selected-target failures are independently classified by IRR's `on_result`
-rules. This makes the scope override observable instead of relying on
-`on_failure: closed` to produce the same result.
+The scope changes judge failures into a local 503 and emits the result
+`switchyard_route.status=judge_failed`; IRR matches both, so unrelated local
+503s do not reach the failure target. Selected-target failures are independently
+classified by IRR's `on_result` rules.
+The judge timeout is 750ms, below the primary step's 1s limit, so a slow judge
+can publish that result before IRR would otherwise return a local 504.
+
+The demo retries the availability-oriented transport classes: admission timeout,
+open circuit, connection/I/O failure, and deadline expiry. It deliberately does
+not retry `response_too_large`; that response ends with 502.
 
 IRR steps do not inherit headers. The failure step configures its JSON
 representation and `failure-cluster` credential with

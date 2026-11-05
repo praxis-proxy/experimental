@@ -18,8 +18,11 @@ _upstream_down = {
     "strong-upstream": threading.Event(),
     "failure-upstream": threading.Event(),
 }
+_upstream_delay_seconds = dict.fromkeys(_upstream_down, 0.0)
+_upstream_response_padding_bytes = dict.fromkeys(_upstream_down, 0)
 _fragmented_stream = threading.Event()
 _fragmented_stream_release = threading.Event()
+_judge_delay_seconds = 0.0
 _failure_authorization = f"Bearer {os.environ.get('SWITCHYARD_FAILURE_API_KEY', 'demo-failure-key')}"
 
 # Markers that flip the mock judge to LIM-2 / p_solve=0 (demo hard prompts).
@@ -143,6 +146,7 @@ def _request_path(handler: BaseHTTPRequestHandler) -> str:
 def judge_handler() -> type[BaseHTTPRequestHandler]:
     class Judge(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
+            global _judge_delay_seconds
             path = _request_path(self)
             if path == "/control/down":
                 _read_json(self)
@@ -155,6 +159,20 @@ def judge_handler() -> type[BaseHTTPRequestHandler]:
                 _judge_down.clear()
                 print("[judge] up", flush=True)
                 _write_json(self, {"judge": "up"})
+                return
+            if path == "/control/judge/delay":
+                milliseconds = _read_json(self).get("milliseconds")
+                if (
+                    not isinstance(milliseconds, int)
+                    or not 0 <= milliseconds <= 10_000
+                ):
+                    self.send_error(
+                        400, "milliseconds must be an integer from 0 to 10000"
+                    )
+                    return
+                _judge_delay_seconds = milliseconds / 1000
+                print(f"[judge] delay={milliseconds}ms", flush=True)
+                _write_json(self, {"judge": {"delay_ms": milliseconds}})
                 return
             if path == "/control/fragmented-stream/on":
                 _read_json(self)
@@ -182,6 +200,32 @@ def judge_handler() -> type[BaseHTTPRequestHandler]:
                     event.clear()
                     _write_json(self, {name: "up"})
                     return
+                if path == f"/control/{name}/delay":
+                    milliseconds = _read_json(self).get("milliseconds")
+                    if (
+                        not isinstance(milliseconds, int)
+                        or not 0 <= milliseconds <= 10_000
+                    ):
+                        self.send_error(
+                            400, "milliseconds must be an integer from 0 to 10000"
+                        )
+                        return
+                    _upstream_delay_seconds[name] = milliseconds / 1000
+                    print(f"[{name}] delay={milliseconds}ms", flush=True)
+                    _write_json(self, {name: {"delay_ms": milliseconds}})
+                    return
+                if path == f"/control/{name}/response-padding":
+                    padding_bytes = _read_json(self).get("bytes")
+                    if (
+                        not isinstance(padding_bytes, int)
+                        or not 0 <= padding_bytes <= 12_000_000
+                    ):
+                        self.send_error(400, "bytes must be an integer from 0 to 12000000")
+                        return
+                    _upstream_response_padding_bytes[name] = padding_bytes
+                    print(f"[{name}] response_padding={padding_bytes}bytes", flush=True)
+                    _write_json(self, {name: {"response_padding_bytes": padding_bytes}})
+                    return
             if not path.startswith("/v1/chat/completions"):
                 self.send_error(404)
                 return
@@ -190,6 +234,11 @@ def judge_handler() -> type[BaseHTTPRequestHandler]:
                 print("[judge] refusing (down)", flush=True)
                 _write_json(self, {"error": "judge down"}, status=503)
                 return
+            delay_seconds = _judge_delay_seconds
+            if delay_seconds:
+                milliseconds = int(delay_seconds * 1000)
+                print(f"[judge] delaying {milliseconds}ms", flush=True)
+                time.sleep(delay_seconds)
             prompt = _latest_user_text(body)
             match = re.search(r"(?is)user:\s*(.+)$", prompt)
             if match:
@@ -234,17 +283,23 @@ def upstream(name: str) -> type[BaseHTTPRequestHandler]:
             if _upstream_down[name].is_set():
                 _write_json(self, {"error": f"{name} down"}, status=503)
                 return
+            delay_seconds = _upstream_delay_seconds[name]
+            if delay_seconds:
+                milliseconds = int(delay_seconds * 1000)
+                print(f"[{name}] delaying {milliseconds}ms", flush=True)
+                time.sleep(delay_seconds)
+            content = f"served_by={name}" + "x" * _upstream_response_padding_bytes[name]
             if body.get("stream") is True:
                 _write_chat_stream(
                     self,
                     body.get("model") or name,
-                    f"served_by={name}",
+                    content,
                     fragmented=_fragmented_stream.is_set(),
                 )
                 return
             _write_json(
                 self,
-                _chat_completion(body.get("model") or name, f"served_by={name}"),
+                _chat_completion(body.get("model") or name, content),
             )
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002

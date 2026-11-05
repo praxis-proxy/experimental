@@ -107,6 +107,12 @@ filter_chains:
       - filter: iterative_request_router
         initial_step: primary
         max_iterations: 2
+        # A primary attempt cannot consume the whole request deadline: retain
+        # time for the one permitted failure-target attempt.
+        timeout_ms: 5000
+        step_timeout_ms: 1000
+        # Keep the local demo bounded and exercise response_too_large safely.
+        max_response_bytes: 1048576
         steps:
           - name: primary
             filters:
@@ -114,7 +120,9 @@ filter_chains:
                 judge:
                   endpoint: "__JUDGE_ENDPOINT__"
                   model: "__JUDGE_MODEL__"
-                  timeout_ms: 10000
+                  # Finish before the IRR step deadline, so a judge timeout can
+                  # become judge_failed and transition to the failure target.
+                  timeout_ms: 750
                 threshold: 0.8
                 targets:
                   weak:
@@ -146,10 +154,28 @@ filter_chains:
                     endpoints:
                       - "127.0.0.1:18093"
             on_result:
-              - origin: local
+              - filter: switchyard_route
+                key: status
+                value: judge_failed
+                origin: local
                 status: [503]
                 next: failure
+              # Retry only availability failures. In particular, do not retry
+              # a response that merely exceeded the gateway's size limit.
               - origin: transport
+                transport_error: admission_timeout
+                next: failure
+              - origin: transport
+                transport_error: circuit_open
+                next: failure
+              - origin: transport
+                transport_error: connect
+                next: failure
+              - origin: transport
+                transport_error: io
+                next: failure
+              - origin: transport
+                transport_error: deadline_exceeded
                 next: failure
               - origin: upstream
                 status: [500, 502, 503, 504]

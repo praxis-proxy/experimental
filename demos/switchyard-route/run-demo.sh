@@ -302,10 +302,66 @@ large_body_fallback_smoke() {
   echo "large-body fallback smoke: 1.1 MiB replay reached the failure target"
 }
 
+timeout_fallback_smoke() {
+  local response status delays_before delays_after
+  delays_before=$(grep -cF '[weak-upstream] delaying 1500ms' "$MOCKS_LOG" || true)
+  curl -sS -m 5 -X POST http://127.0.0.1:18091/control/weak-upstream/delay \
+    -H 'content-type: application/json' -d '{"milliseconds":1500}' >/dev/null
+  response=$(curl -sS -m 10 -w $'\n%{http_code}' -X POST "$GATEWAY" \
+    -H 'content-type: application/json' \
+    -d '{"model":"agent-default","messages":[{"role":"user","content":"timeout fallback smoke"}],"max_tokens":8}')
+  curl -sS -m 5 -X POST http://127.0.0.1:18091/control/weak-upstream/delay \
+    -H 'content-type: application/json' -d '{"milliseconds":0}' >/dev/null
+  status=${response##*$'\n'}
+  [[ "$status" == 200 ]]
+  grep -q 'served_by=failure-upstream' <<<"$response"
+  delays_after=$(grep -cF '[weak-upstream] delaying 1500ms' "$MOCKS_LOG" || true)
+  [[ "$delays_after" -eq "$((delays_before + 1))" ]]
+  echo "timeout fallback smoke: the primary timed out and the failure target had remaining time"
+}
+
+judge_timeout_fallback_smoke() {
+  local response status delays_before delays_after
+  delays_before=$(grep -cF '[judge] delaying 1500ms' "$MOCKS_LOG" || true)
+  curl -sS -m 5 -X POST http://127.0.0.1:18091/control/judge/delay \
+    -H 'content-type: application/json' -d '{"milliseconds":1500}' >/dev/null
+  response=$(curl -sS -m 10 -w $'\n%{http_code}' -X POST "$GATEWAY" \
+    -H 'content-type: application/json' \
+    -d '{"model":"agent-default","messages":[{"role":"user","content":"judge timeout fallback smoke"}],"max_tokens":8}')
+  curl -sS -m 5 -X POST http://127.0.0.1:18091/control/judge/delay \
+    -H 'content-type: application/json' -d '{"milliseconds":0}' >/dev/null
+  status=${response##*$'\n'}
+  [[ "$status" == 200 ]]
+  grep -q 'served_by=failure-upstream' <<<"$response"
+  delays_after=$(grep -cF '[judge] delaying 1500ms' "$MOCKS_LOG" || true)
+  [[ "$delays_after" -eq "$((delays_before + 1))" ]]
+  echo "judge timeout fallback smoke: Switchyard published the judge failure before IRR timed out"
+}
+
+response_too_large_smoke() {
+  local response status failure_before failure_after
+  failure_before=$(grep -cF '[failure-upstream] "POST /v1/chat/completions' "$MOCKS_LOG" || true)
+  curl -sS -m 5 -X POST http://127.0.0.1:18091/control/weak-upstream/response-padding \
+    -H 'content-type: application/json' -d '{"bytes":1100000}' >/dev/null
+  response=$(curl -sS -m 10 -w $'\n%{http_code}' -X POST "$GATEWAY" \
+    -H 'content-type: application/json' \
+    -d '{"model":"agent-default","messages":[{"role":"user","content":"oversized response smoke"}],"max_tokens":8}')
+  curl -sS -m 5 -X POST http://127.0.0.1:18091/control/weak-upstream/response-padding \
+    -H 'content-type: application/json' -d '{"bytes":0}' >/dev/null
+  status=${response##*$'\n'}
+  [[ "$status" == 502 ]]
+  failure_after=$(grep -cF '[failure-upstream] "POST /v1/chat/completions' "$MOCKS_LOG" || true)
+  [[ "$failure_after" -eq "$failure_before" ]]
+  echo "response-too-large smoke: an oversized primary response did not reach the failure target"
+}
+
 stream_smoke
 fragmented_stream_smoke
 error_smoke
 large_body_fallback_smoke
+timeout_fallback_smoke
+judge_timeout_fallback_smoke
+response_too_large_smoke
 
 ask() {
   local label=$1 prompt=$2 session=${3:-} expected_upstream=${4:-} expected_status=${5:-200}
