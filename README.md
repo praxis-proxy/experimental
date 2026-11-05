@@ -1,4 +1,6 @@
 # Praxis Experimental
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fpraxis-proxy%2Fexperimental.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fpraxis-proxy%2Fexperimental?ref=badge_shield)
+
 
 Experimental filters, features, and builds for Praxis.
 
@@ -45,3 +47,6 @@ the relevant documentation.
 ## License
 
 [Apache-2.0](LICENSE)
+
+
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fpraxis-proxy%2Fexperimental.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fpraxis-proxy%2Fexperimental?ref=badge_large)
