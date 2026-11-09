@@ -1,0 +1,46 @@
+listeners:
+  - name: gateway
+    address: "0.0.0.0:8080"
+    filter_chains: [routing]
+
+filter_chains:
+  - name: routing
+    filters:
+      - filter: switchyard_route
+        judge:
+          endpoint: "http://mocks:18091/v1/chat/completions"
+          model: "mock-switchyard-judge"
+        threshold: 0.8
+        targets:
+          weak:
+            cluster: weak-cluster
+            model: budgeted-model
+          strong:
+            cluster: strong-cluster
+            model: budgeted-model
+        on_failure: closed
+        session_floor: disabled
+      # This filter precedes token_count so its response hook sees the token
+      # metadata after token_count has extracted it from the mock response.
+      - filter: external_metering
+        metering_url: "http://metering:8080"
+        allow_private_endpoint: true
+        default_model: budgeted-model
+        default_username: demo-user
+        fail_open: false
+        feature_key: inference-tokens
+        source: switchyard-pricetag-demo
+        timeout_seconds: 5
+      - filter: token_count
+        provider: openai
+      - filter: load_balancer
+        clusters:
+          - name: weak-cluster
+            endpoints: ["mocks:18092"]
+          - name: strong-cluster
+            endpoints: ["mocks:18093"]
+
+insecure_options:
+  allow_private_endpoints: true
+  allow_private_upstreams: true
+  allow_root: true

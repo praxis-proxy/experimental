@@ -10,4 +10,5 @@ Demonstrations of experimental Praxis features live in this directory.
 - [Praxis Grid - Static and dynamic weighted routing](grid-weighted-dynamic-routing/README.md)
 - [OTel observability benchmark](otel-benchmark/README.md)
 - [Mixture-of-Models routing with Switchyard](switchyard-route/README.md)
+- [Switchyard + PriceTag USD-budget exhaustion](switchyard-pricetag/README.md)
 - [AI Gateway - local models, token budgets, span-derived dashboards](ai-gateway/README.md)

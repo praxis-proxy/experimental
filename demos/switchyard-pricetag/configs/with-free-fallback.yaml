@@ -1,0 +1,74 @@
+listeners:
+  - name: gateway
+    address: "0.0.0.0:8080"
+    filter_chains: [routing]
+
+filter_chains:
+  - name: routing
+    filters:
+      # The router buffers this finite JSON demo request. The primary step
+      # meters normally; the free step deliberately does not meter again.
+      - filter: iterative_request_router
+        initial_step: primary
+        max_iterations: 2
+        steps:
+          - name: primary
+            filters:
+              - filter: switchyard_route
+                judge:
+                  endpoint: "http://mocks:18091/v1/chat/completions"
+                  model: "mock-switchyard-judge"
+                threshold: 0.8
+                targets:
+                  weak:
+                    cluster: weak-cluster
+                    model: budgeted-model
+                  strong:
+                    cluster: strong-cluster
+                    model: budgeted-model
+                on_failure: closed
+                session_floor: disabled
+              - filter: external_metering
+                metering_url: "http://metering:8080"
+                allow_private_endpoint: true
+                default_model: budgeted-model
+                default_username: demo-user
+                fail_open: false
+                feature_key: inference-tokens
+                source: switchyard-pricetag-demo
+                timeout_seconds: 5
+              - filter: token_count
+                provider: openai
+              - filter: load_balancer
+                clusters:
+                  - name: weak-cluster
+                    endpoints: ["mocks:18092"]
+                  - name: strong-cluster
+                    endpoints: ["mocks:18093"]
+            on_result:
+              # This demo has no token limiter. Therefore the only local 429
+              # is external_metering's PriceTag budget denial.
+              - origin: local
+                status: [429]
+                next: free
+              - default: true
+                done: true
+          - name: free
+            filters:
+              - filter: switchyard_failure_target
+                cluster: free-cluster
+                model: free-model
+              - filter: token_count
+                provider: openai
+              - filter: load_balancer
+                clusters:
+                  - name: free-cluster
+                    endpoints: ["mocks:18094"]
+            on_result:
+              - default: true
+                done: true
+
+insecure_options:
+  allow_private_endpoints: true
+  allow_private_upstreams: true
+  allow_root: true

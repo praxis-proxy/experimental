@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Build PriceTag from the exact revision exercised by Secure Single Server.
+# `git archive` keeps checkout-only changes and credentials out of the image.
+
+readonly EXPECTED_COMMIT=557ceb1cbe1316d93e0f682baa8301455956fe18
+readonly DEFAULT_IMAGE=local/pricetag-metering:issue-58-557ceb1
+
+source_dir=${1:?usage: build-metering /path/to/pricetag-metering [image-tag]}
+image_tag=${2:-$DEFAULT_IMAGE}
+
+actual_commit=$(git -C "$source_dir" rev-parse HEAD)
+if [[ "$actual_commit" != "$EXPECTED_COMMIT" ]]; then
+  echo "expected PriceTag commit $EXPECTED_COMMIT, got $actual_commit" >&2
+  exit 2
+fi
+
+if ! git -C "$source_dir" diff --quiet --ignore-submodules --; then
+  echo 'PriceTag checkout has uncommitted changes; refusing to build an unreviewed image' >&2
+  exit 2
+fi
+
+build_dir=$(mktemp -d)
+cleanup() {
+  rm -rf "$build_dir"
+}
+trap cleanup EXIT
+
+git -C "$source_dir" archive "$EXPECTED_COMMIT" | tar -x -C "$build_dir"
+docker build --platform linux/amd64 --tag "$image_tag" "$build_dir" >&2
+printf '%s\n' "$image_tag"

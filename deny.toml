@@ -16,6 +16,10 @@ ignore = [
   # lru 0.16.4: unsound LruCache::pop() panic safety, via
   # quixotic-plecostomus-cache / -pool
   "RUSTSEC-2026-0253",
+  # pin-utils 0.1.0: unmaintained via aws-smithy-types, inherited from the
+  # pinned praxis-ai dependency. RustSec reports no safe upgrade; remove this
+  # exception when praxis-ai's AWS Smithy dependency chain no longer requires it.
+  "RUSTSEC-2026-0441",
 ]
 
 [licenses]

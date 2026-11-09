@@ -1,0 +1,78 @@
+name: switchyard-pricetag
+
+services:
+  postgres:
+    image: docker.io/library/postgres:16-alpine
+    environment:
+      POSTGRES_DB: metering
+      POSTGRES_PASSWORD: metering-demo
+      POSTGRES_USER: metering
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metering -d metering"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    networks: [demo]
+
+  metering:
+    image: ${METERING_IMAGE:?run ./build-metering and set METERING_IMAGE}
+    restart: on-failure
+    environment:
+      DATABASE_URL: postgres://metering:metering-demo@postgres:5432/metering?sslmode=disable
+      M2M_AUTH_REQUIRED: "false"
+      MONTHLY_TOKEN_QUOTA: "10000000000"
+      QUOTA_ENFORCEMENT_ENABLED: "true"
+      SESSION_SECRET: local-demo-only-session-secret
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [demo]
+
+  bootstrap:
+    image: docker.io/library/postgres:16-alpine
+    user: "0:0"
+    environment:
+      PGPASSWORD: metering-demo
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        until psql -h postgres -U metering -d metering -Atqc "SELECT to_regclass('public.model_pricing') IS NOT NULL AND EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'quota_policy' AND column_name = 'allowed_over_limit_models')" | grep -qx t; do sleep 1; done
+        psql -h postgres -U metering -d metering -v ON_ERROR_STOP=1 -f /bootstrap.sql
+    volumes:
+      - ./bootstrap.sql:/bootstrap.sql:ro,Z
+    depends_on:
+      metering:
+        condition: service_started
+    networks: [demo]
+
+  mocks:
+    image: docker.io/library/python:3.13-alpine
+    command: ["python3", "/app/mocks.py"]
+    volumes:
+      - ./mocks.py:/app/mocks.py:ro,Z
+    ports:
+      - "127.0.0.1:18090:9090"
+    networks: [demo]
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: Containerfile
+    image: local/praxis-switchyard-pricetag:issue-58
+    command: ["-c", "/etc/praxis/praxis.yaml"]
+    environment:
+      RUST_LOG: info,praxis_experimental_filters=debug
+    volumes:
+      - ./${GATEWAY_CONFIG:?set GATEWAY_CONFIG to a config path}:/etc/praxis/praxis.yaml:ro,Z
+    ports:
+      - "127.0.0.1:18080:8080"
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      mocks:
+        condition: service_started
+    networks: [demo]
+
+networks:
+  demo: {}
