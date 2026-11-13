@@ -1,0 +1,42 @@
+{
+  "status": "historical",
+  "package_revision": "3861cce549b3989b6e603f3bcd5b2ac46152f155",
+  "recorded_ui": {
+    "run_id": "20261108T214611Z",
+    "sha256": "f0fe3b6eba384db41e91790e02261e82ca026ef3b8fde7fd1cce958e93472735",
+    "duration_seconds": 93.766,
+    "kept_in_repository": false
+  },
+  "demo_video_url": "https://github.com/user-attachments/assets/932431ef-2f57-455e-b847-c6785fc46784",
+  "live_qualification": {
+    "status": "historical",
+    "grid_commit": "0fc905dfae058e5c54ddebdc384e345fbfecc1a4",
+    "grid_source_state_sha256": "c7bc7a45c371ea7503dda53ef39cee65700d359921f3f9dbafaed9840ff91df2",
+    "dynamo_image": "nvcr.io/nvidia/ai-dynamo/dynamo-planner@sha256:f69ac8f2165289e0f9d06aa125fac8bda3a401b42f640235fca28b0c852b9875",
+    "current_source_requalified": false
+  },
+  "scope": {
+    "grid_only_quick_starts_kind": false,
+    "full_mode_tests_frontend_and_mocker": true,
+    "full_mode_tests_overlay_distribution": false,
+    "full_mode_tests_cross_site_routing": false
+  },
+  "demonstrated": [
+    "historical UI run showed frontend readiness and active requests",
+    "historical sample displayed request attribution and recovery"
+  ],
+  "configured": ["four active requests as a comparison reference"],
+  "inferred": [],
+  "limitations": [
+    "current live qualification has not been rerun",
+    "historical capture state is not a current deployment",
+    "Mocker responses are synthetic",
+    "no GPU performance, model quality, weighted-share precision, or live SWIM claim"
+  ],
+  "validation": {
+    "readme_and_manifest_packaged": true,
+    "current_quick_mode_rerun": false,
+    "current_full_runtime_rerun": false,
+    "video_uploaded": true
+  }
+}
