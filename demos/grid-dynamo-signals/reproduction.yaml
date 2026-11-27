@@ -1,0 +1,61 @@
+apiVersion: research.praxis.dev/v1alpha1
+kind: Reproduction
+
+metadata:
+  name: grid-dynamo-pluggable-signals
+  status: packaged
+
+spec:
+  source:
+    repository: https://github.com/nerdalert/grid.git
+    branch: feat/dynamo-pluggable-inference-signals
+    commit: 3861cce549b3989b6e603f3bcd5b2ac46152f155
+    topology: tests/e2e/topologies/grid-dynamo-pluggable
+    runner: cargo xtask
+
+  runtime:
+    kindNodeImage: kindest/node:v1.34.3
+    dynamoImage: nvcr.io/nvidia/ai-dynamo/dynamo-planner:1.6.1
+    dynamoImageDigest: sha256:f69ac8f2165289e0f9d06aa125fac8bda3a401b42f640235fca28b0c852b9875
+    model: Qwen/Qwen3-0.6B
+    tokenizerRevision: c1899de289a04d12100db370d81485cdf75e47ca
+    gpuRequired: false
+
+  modes:
+    - id: grid-only-quick
+      command: cargo xtask env run-grid-dynamo-pluggable-quick --evidence-dir <run-owned-directory>
+      startsKind: false
+      tests:
+        - grid-signals contract
+        - operator Dynamo adapter and readiness policy
+        - Gateway signal filter contract
+      qualifies:
+        - deterministic Grid parser and routing-signal contracts
+      doesNotQualify:
+        - Dynamo runtime
+        - Grid operator overlay distribution
+        - cross-site routing
+
+    - id: dynamo-runtime-full
+      command: cargo xtask env run-grid-dynamo-pluggable-full --evidence-dir <run-owned-directory>
+      startsKind: true
+      tests:
+        - Frontend registration and readiness
+        - structurally valid synthetic chat completion
+        - active-request pressure and recovery
+        - pinned runtime identity and run-owned cleanup
+      doesNotQualify:
+        - Grid operator overlay distribution
+        - live cross-site request routing
+
+  historicalQualification:
+    status: historical
+    runId: 20261108T214611Z
+    gridCommit: 0fc905dfae058e5c54ddebdc384e345fbfecc1a4
+    gridSourceStateSha256: c7bc7a45c371ea7503dda53ef39cee65700d359921f3f9dbafaed9840ff91df2
+    currentLiveQualification: not-run
+
+  evidence:
+    output: <run-owned-directory>/<unique-run-id>/qualification.json
+    keepOutsideRepository: true
+    includeSecrets: false
